@@ -67,6 +67,8 @@
     box-shadow:0 6px 18px rgba(0,0,0,.25);
   }
   .tooltip.show{opacity:1;}
+
+  /* Контейнер для правой панели */
   .floor-switcher-right {
     position: fixed;
     right: 10px;
@@ -78,10 +80,35 @@
     z-index: 20;
     align-items: flex-end;
   }
-  .floor-switcher-right > .schedule-btn,
-  .floor-switcher-right > .floor-btn {
+
+  /* Обертка для кнопок этажей */
+  .floors-wrapper {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-end;
+  }
+
+  .floor-menu-btn {
+    width: 50px;height: 50px;border-radius: 50%;
+    border: none;background: #2f6fed;color: #fff;
+    font-size: 20px;font-weight: bold;cursor: pointer;
+    display: none; /* Скрыта на ПК */
+    justify-content: center;align-items: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+    transition: all 0.2s;
     margin-right: 5px;
   }
+  .floor-menu-btn:hover { background: #1a5fc0; }
+
+  .floors-dropdown {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-end;
+  }
+
   .floor-btn {
     width: 50px;height: 50px;border-radius: 50%;
     border: none;background: #9be5ff;color: #333;
@@ -89,11 +116,13 @@
     display: flex;justify-content: center;align-items: center;
     box-shadow: 0 4px 10px rgba(0,0,0,0.1);
     transition: all 0.2s;
+    margin-right: 5px;
   }
   .floor-btn:hover { background: #7ddcff; }
   .floor-btn.active {
     background: #2f6fed;color: #fff;transform: scale(1.1);
   }
+
   .zoom-controls{
     position:fixed;
     left: 20px;
@@ -267,6 +296,70 @@
   .schedule-table tr.current-lesson td:first-child {
     border-left: 3px solid #2f6fed;
   }
+
+  /* --- МОБИЛЬНАЯ ВЕРСИЯ (экраны меньше 768px) --- */
+  @media (max-width: 768px) {
+    .floor-switcher-right {
+      right: 12px;
+      top: 15px;
+      transform: none;
+      gap: 8px;
+    }
+    .class-timer {
+      padding: 6px 10px;
+      min-width: 70px;
+    }
+    .class-timer__time { font-size: 18px; }
+    .class-timer__lesson { font-size: 10px; }
+
+    .schedule-btn, .floor-menu-btn, .floor-btn {
+      width: 40px;
+      height: 40px;
+      font-size: 16px;
+      margin-right: 0;
+    }
+
+    .floors-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 8px;
+      padding: 8px;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+    .floors-dropdown.open {
+      display: flex;
+    }
+
+    .floor-menu-btn {
+      display: flex; /* Показываем кнопку-меню на телефоне */
+    }
+
+    .search-bar {
+      top: 15px;
+      left: 12px;
+      transform: none;
+      width: calc(100% - 75px);
+    }
+    .search-bar input {
+      padding: 10px 15px;
+      font-size: 14px;
+    }
+
+    .zoom-controls {
+      left: 12px;
+      bottom: 12px;
+      gap: 8px;
+    }
+    .zoom-btn {
+      width: 40px;
+      height: 40px;
+      font-size: 18px;
+    }
+  }
 </style>
 </head>
 <body>
@@ -289,10 +382,17 @@
     <div class="class-timer__lesson" id="timerLesson"></div>
   </div>
   <button class="schedule-btn" id="scheduleBtn" title="Расписание звонков">🔔</button>
-  <button class="floor-btn active" data-floor="1">1</button>
-  <button class="floor-btn" data-floor="2">2</button>
-  <button class="floor-btn" data-floor="3">3</button>
-  <button class="floor-btn" data-floor="4">4</button>
+
+  <!-- Новая обертка для этажей -->
+  <div class="floors-wrapper">
+    <button class="floor-menu-btn" id="floorMenuBtn" title="Выбрать этаж">🏢</button>
+    <div class="floors-dropdown" id="floorsDropdown">
+      <button class="floor-btn active" data-floor="1">1</button>
+      <button class="floor-btn" data-floor="2">2</button>
+      <button class="floor-btn" data-floor="3">3</button>
+      <button class="floor-btn" data-floor="4">4</button>
+    </div>
+  </div>
 </div>
 <div class="zoom-controls">
   <button class="zoom-btn" id="zoomIn" title="Приблизить">+</button>
@@ -770,12 +870,9 @@ window.FLOOR_DATA = {
 <g transform="translate(323.5 333) scale(0.4)" fill="black">
   <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,13 L12,13 L12,16 L15,22 L12,22 L10,17 L8,22 L5,22 L8,16 L8,13 L5,13 Z"/>
 </g>
-<!-- Мужская -->
 <g transform="translate(347 330) scale(1)">
   <path d="M12 2C13.1 2 14 2.9 14 4C14 5.1 13.1 6 12 6C10.9 6 10 5.1 10 4C10 2.9 10.9 2 12 2ZM9 7H15L17 14H15L15 18L16 24H13L12 19L11 24H8L9 18V14H7L9 7Z" fill="black"/>
 </g>
-
-<!-- Женская -->
 <g transform="translate(298 330) scale(1)">
   <path d="M12 2C13.1 2 14 2.9 14 4C14 5.1 13.1 6 12 6C10.9 6 10 5.1 10 4C10 2.9 10.9 2 12 2ZM9 7H15L17 15H14L14 18L17 24H14L12 19L10 24H7L10 18V15H7L9 7Z" fill="black"/>
 </g>`
@@ -1037,7 +1134,6 @@ window.FLOOR_DATA = {
 <rect x="361" y="73" width="37" height="30" fill="white"/>
 <rect x="281" y="106" width="22" height="15" fill="white"/>
 
-<!-- Раздевалки -->
 <g transform="translate(462 80) scale(0.9)" fill="black">
   <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,12 L13,12 L13,16 L14,22 L11,22 L10,17 L9,22 L6,22 L7,16 L7,12 L5,12 Z"/>
 </g>
@@ -1219,7 +1315,6 @@ window.FLOOR_DATA = {
 <rect x="384" y="3" width="58" height="29" fill="white"/>
 <rect x="445" y="3" width="55" height="29" fill="white"/>
 
-<!-- Раздевалка -->
 <g transform="translate(5 73) scale(0.9)" fill="black">
   <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,13 L12,13 L12,16 L15,22 L12,22 L10,17 L8,22 L5,22 L8,16 L8,13 L5,13 Z"/>
 </g>
@@ -1393,7 +1488,6 @@ window.FLOOR_DATA = {
 <line x1="476.646" y1="94.6464" x2="501.646" y2="69.6464" stroke="black"/>
 <line x1="476.646" y1="91.6464" x2="499.646" y2="68.6464" stroke="black"/>
 
-<!-- Раздевалки -->
 <g transform="translate(26.5 73) scale(0.85)" fill="black">
   <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,13 L12,13 L12,16 L15,22 L12,22 L10,17 L8,22 L5,22 L8,16 L8,13 L5,13 Z"/>
 </g>
@@ -1616,7 +1710,7 @@ let dragging = false;
 let startX = 0, startY = 0, startTx = 0, startTy = 0;
 stage.addEventListener('mousedown', e => {
   if (e.button !== 0) return;
-  if (e.target.closest('.zoom-btn') || e.target.closest('.floor-btn') || e.target.closest('.search-bar') || e.target.closest('.schedule-btn') || e.target.closest('.class-timer')) return;
+  if (e.target.closest('.zoom-btn') || e.target.closest('.floor-btn') || e.target.closest('.search-bar') || e.target.closest('.schedule-btn') || e.target.closest('.class-timer') || e.target.closest('.floor-menu-btn') || e.target.closest('.floors-dropdown')) return;
   dragging = true;
   startX = e.clientX; startY = e.clientY;
   startTx = tx; startTy = ty;
@@ -2105,6 +2199,32 @@ scheduleTabs.forEach(tab => {
     }, 10);
   });
 });
+
+// --- Логика для мобильного меню этажей ---
+const floorMenuBtn = document.getElementById('floorMenuBtn');
+const floorsDropdown = document.getElementById('floorsDropdown');
+
+if (floorMenuBtn && floorsDropdown) {
+  // Открытие/закрытие по клику на кнопку
+  floorMenuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    floorsDropdown.classList.toggle('open');
+  });
+
+  // Закрытие меню при выборе этажа
+  document.querySelectorAll('.floor-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      floorsDropdown.classList.remove('open');
+    });
+  });
+
+  // Закрытие меню при клике в любое другое место
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.floors-wrapper')) {
+      floorsDropdown.classList.remove('open');
+    }
+  });
+}
 </script>
 </body>
 </html>
