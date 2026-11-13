@@ -1,0 +1,2110 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Интерактивная карта здания</title>
+<style>
+  :root{
+    --bg: #f2f2f0;
+    --panel: #ffffff;
+    --room-fill: #fce7cc;
+    --room-stroke: #2d2d2d;
+    --text: #000000;
+    --accent: #2f6fed;
+    --border: #d7dee8;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0;padding:0;height:100%;width:100%;overflow:hidden;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+    background:var(--bg);color:var(--text);
+  }
+  .map-stage{
+    position:fixed;inset:0;
+    overflow:hidden;
+    cursor:grab;
+    touch-action:none;
+    user-select:none;
+  }
+  .map-stage.dragging{cursor:grabbing;}
+  .viewport{
+    position:absolute;top:0;left:0;
+    transform-origin:0 0;
+    will-change:transform;
+    transition:transform .12s ease-out;
+  }
+  .viewport.no-anim{transition:none;}
+  .floor{display:none;width:100%;}
+  .floor.active{display:block;}
+  .floor svg{width:100%;height:100%;display:block;pointer-events:auto;}
+  .room-highlight{
+    fill: var(--room-fill);
+    stroke: var(--room-stroke);
+    stroke-width: 1.5;
+    transition: fill 0.2s ease, filter 0.2s ease;
+    cursor: pointer;
+  }
+  .room-highlight:hover { filter: brightness(0.95); }
+  .room-highlight.flash {
+    fill: #ffd27a;
+    filter: brightness(1.05) drop-shadow(0 0 6px #ffb300);
+  }
+  .room-text {
+    fill: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    font-family: system-ui, sans-serif;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    pointer-events: none;
+  }
+  .tooltip{
+    position:fixed;pointer-events:none;background:#111827;color:#fff;
+    font-size:13px;line-height:1.35;padding:7px 10px;border-radius:8px;
+    opacity:0;transform:translate(-50%,-100%);
+    transition:opacity .12s ease;white-space:nowrap;z-index:30;
+    box-shadow:0 6px 18px rgba(0,0,0,.25);
+  }
+  .tooltip.show{opacity:1;}
+  .floor-switcher-right {
+    position: fixed;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 20;
+    align-items: flex-end;
+  }
+  .floor-switcher-right > .schedule-btn,
+  .floor-switcher-right > .floor-btn {
+    margin-right: 5px;
+  }
+  .floor-btn {
+    width: 50px;height: 50px;border-radius: 50%;
+    border: none;background: #9be5ff;color: #333;
+    font-size: 18px;font-weight: 500;cursor: pointer;
+    display: flex;justify-content: center;align-items: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    transition: all 0.2s;
+  }
+  .floor-btn:hover { background: #7ddcff; }
+  .floor-btn.active {
+    background: #2f6fed;color: #fff;transform: scale(1.1);
+  }
+  .zoom-controls{
+    position:fixed;
+    left: 20px;
+    bottom: 20px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    z-index:20;
+  }
+  .zoom-btn{
+    width:50px;height:50px;border-radius:50%;border:none;
+    background:#9be5ff;color:#333;font-size:22px;font-weight:bold;
+    cursor:pointer;display:flex;align-items:center;justify-content:center;
+    box-shadow:0 4px 10px rgba(0,0,0,0.1);transition:all .15s;
+  }
+  .zoom-btn:hover{background:#7ddcff;}
+  .zoom-btn:active{transform:scale(.95);}
+  .search-bar {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60%;
+    max-width: 600px;
+    z-index: 20;
+  }
+  .search-bar input {
+    width: 100%;
+    padding: 15px 20px;
+    border-radius: 8px;
+    border: 2px solid #9be5ff;
+    background: #9be5ff;
+    font-size: 18px;
+    outline: none;
+  }
+  .search-bar input:focus {
+    background: #fff;
+    border-color: #2f6fed;
+  }
+  .search-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 6px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.15);
+    max-height: 260px;
+    overflow-y: auto;
+    display: none;
+  }
+  .search-suggestions.open { display: block; }
+  .search-suggestions .item {
+    padding: 10px 16px;
+    cursor: pointer;
+    font-size: 15px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .search-suggestions .item:hover,
+  .search-suggestions .item.active {
+    background: #eaf2ff;
+  }
+  .search-suggestions .item .floor-tag {
+    color: #2f6fed;
+    font-size: 13px;
+    opacity: .8;
+    white-space: nowrap;
+  }
+  .search-suggestions .empty {
+    padding: 10px 16px;
+    color: #888;
+    font-size: 14px;
+  }
+  .schedule-btn {
+    width: 50px; height: 50px; border-radius: 50%;
+    border: none; background: #ffd27a; color: #333;
+    font-size: 22px; cursor: pointer;
+    display: flex; justify-content: center; align-items: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    transition: all 0.2s; margin-bottom: 6px;
+  }
+  .schedule-btn:hover { background: #ffc043; transform: scale(1.05); }
+  .schedule-btn:active { transform: scale(0.95); }
+  .schedule-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+    display: none; justify-content: center; align-items: center;
+    z-index: 100; padding: 16px;
+  }
+  .schedule-modal.open { display: flex; }
+  .schedule-modal__content {
+    background: #fff; border-radius: 14px;
+    max-width: 540px; width: 100%; max-height: 85vh;
+    overflow-y: auto; padding: 22px 24px;
+    position: relative; box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+    animation: modalIn .18s ease-out;
+  }
+  @keyframes modalIn {
+    from { opacity: 0; transform: translateY(12px) scale(.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .schedule-modal__close {
+    position: absolute; top: 12px; right: 16px;
+    border: none; background: transparent; font-size: 26px;
+    line-height: 1; cursor: pointer; color: #666;
+  }
+  .schedule-modal__close:hover { color: #000; }
+  .schedule-modal__title { margin: 0 0 16px; font-size: 20px; font-weight: 600; padding-right: 30px; }
+  .schedule-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .schedule-tab {
+    padding: 6px 12px; border: 1px solid #d7dee8; background: #fff;
+    border-radius: 20px; font-size: 13px; cursor: pointer;
+    transition: all 0.2s; color: #555;
+  }
+  .schedule-tab:hover { background: #f0f4f9; }
+  .schedule-tab.active { background: #2f6fed; color: #fff; border-color: #2f6fed; }
+  .schedule-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 16px; }
+  .schedule-table th, .schedule-table td {
+    padding: 8px 10px; text-align: center; border-bottom: 1px solid #e6ebf2;
+  }
+  .schedule-table th { background: #eaf2ff; font-weight: 600; color: #2f6fed; }
+  .schedule-table tr:last-child td { border-bottom: none; }
+  .schedule-table td:first-child { font-weight: 600; }
+  .shift-title { font-size: 14px; font-weight: 600; color: #2f6fed; margin: 12px 0 6px; }
+  .schedule-note { font-size: 12px; color: #888; font-style: italic; margin-top: 4px; }
+  .hidden { display: none !important; }
+  .class-timer {
+    background: #fff;
+    border-radius: 12px;
+    padding: 10px 14px;
+    text-align: center;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    margin-bottom: 6px;
+    min-width: 90px;
+    border: 2px solid #eaf2ff;
+    transition: all 0.3s;
+  }
+  .class-timer.status-lesson { border-color: #2f6fed; }
+  .class-timer.status-break { border-color: #43c96c; }
+  .class-timer__label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #888;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+  .class-timer.status-lesson .class-timer__label { color: #2f6fed; }
+  .class-timer.status-break .class-timer__label { color: #2b9e4d; }
+  .class-timer__time {
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #333;
+    line-height: 1.2;
+  }
+  .class-timer.status-lesson .class-timer__time { color: #2f6fed; }
+  .class-timer.status-break .class-timer__time { color: #2b9e4d; }
+  .class-timer__lesson {
+    font-size: 11px;
+    color: #666;
+    margin-top: 2px;
+  }
+  .schedule-table tr.current-lesson td {
+    background-color: #eaf2ff !important;
+    font-weight: 700;
+    color: #2f6fed;
+  }
+  .schedule-table tr.current-lesson td:first-child {
+    border-left: 3px solid #2f6fed;
+  }
+</style>
+</head>
+<body>
+<div class="search-bar">
+  <input type="text" id="searchInput" placeholder="Поиск кабинета (например: 10, 29, 53, Тр.зал)" autocomplete="off">
+  <div class="search-suggestions" id="searchSuggestions"></div>
+</div>
+<div class="map-stage" id="stage">
+  <div class="viewport" id="viewport">
+    <div class="floor active" id="floor-1"></div>
+    <div class="floor" id="floor-2"></div>
+    <div class="floor" id="floor-3"></div>
+    <div class="floor" id="floor-4"></div>
+  </div>
+</div>
+<div class="floor-switcher-right" id="floorSwitcher">
+  <div class="class-timer" id="classTimer">
+    <div class="class-timer__label" id="timerLabel">Загрузка...</div>
+    <div class="class-timer__time" id="timerTime">--:--</div>
+    <div class="class-timer__lesson" id="timerLesson"></div>
+  </div>
+  <button class="schedule-btn" id="scheduleBtn" title="Расписание звонков">🔔</button>
+  <button class="floor-btn active" data-floor="1">1</button>
+  <button class="floor-btn" data-floor="2">2</button>
+  <button class="floor-btn" data-floor="3">3</button>
+  <button class="floor-btn" data-floor="4">4</button>
+</div>
+<div class="zoom-controls">
+  <button class="zoom-btn" id="zoomIn" title="Приблизить">+</button>
+  <button class="zoom-btn" id="zoomOut" title="Отдалить">−</button>
+  <button class="zoom-btn" id="zoomReset" title="Сбросить">⟲</button>
+</div>
+<div class="tooltip" id="tooltip"></div>
+<div class="schedule-modal" id="scheduleModal">
+  <div class="schedule-modal__content">
+    <button class="schedule-modal__close" id="scheduleClose" aria-label="Закрыть">&times;</button>
+    <h2 class="schedule-modal__title">Расписание звонков</h2>
+    <div class="schedule-tabs">
+      <button class="schedule-tab active" data-tab="normal">Обычные дни</button>
+      <button class="schedule-tab" data-tab="short">Пн / Чт (сокращ.)</button>
+      <button class="schedule-tab" data-tab="saturday">Суббота</button>
+    </div>
+    <div class="schedule-content" id="tab-normal">
+      <div style="display:flex; gap:16px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:200px;">
+          <div class="shift-title">I смена</div>
+          <table class="schedule-table">
+            <tr><th>Урок</th><th>Время</th></tr>
+            <tr><td>1</td><td>08.00 – 08.40</td></tr>
+            <tr><td>2</td><td>08.45 – 09.25</td></tr>
+            <tr><td>3</td><td>09.35 – 10.15</td></tr>
+            <tr><td>4</td><td>10.30 – 11.10</td></tr>
+            <tr><td>5</td><td>11.20 – 12.00</td></tr>
+            <tr><td>6</td><td>12.15 – 12.55</td></tr>
+            <tr><td>7</td><td>13.00 – 13.40</td></tr>
+          </table>
+        </div>
+        <div style="flex:1; min-width:200px;">
+          <div class="shift-title">II смена</div>
+          <table class="schedule-table">
+            <tr><th>Урок</th><th>Время</th></tr>
+            <tr><td>1</td><td>13.00 – 13.40</td></tr>
+            <tr><td>2</td><td>13.50 – 14.30</td></tr>
+            <tr><td>3</td><td>14.45 – 15.25</td></tr>
+            <tr><td>4</td><td>15.35 – 16.15</td></tr>
+            <tr><td>5</td><td>16.20 – 17.00</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="schedule-content hidden" id="tab-short">
+      <div style="display:flex; gap:16px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:200px;">
+          <div class="shift-title">I смена</div>
+          <table class="schedule-table">
+            <tr><th>Урок</th><th>Время</th></tr>
+            <tr><td>1</td><td>08.00 – 08.35</td></tr>
+            <tr><td>2</td><td>08.40 – 09.15</td></tr>
+            <tr><td>3</td><td>09.25 – 10.00</td></tr>
+            <tr><td>4</td><td>10.15 – 10.50</td></tr>
+            <tr><td>5</td><td>11.00 – 11.35</td></tr>
+            <tr><td>6</td><td>11.50 – 12.25</td></tr>
+            <tr><td>7</td><td>12.30 – 13.05</td></tr>
+          </table>
+        </div>
+        <div style="flex:1; min-width:200px;">
+          <div class="shift-title">II смена</div>
+          <table class="schedule-table">
+            <tr><th>Урок</th><th>Время</th></tr>
+            <tr><td>0</td><td>13.00 – 13.15</td></tr>
+            <tr><td>1</td><td>13.20 – 13.55</td></tr>
+            <tr><td>2</td><td>14.00 – 14.35</td></tr>
+            <tr><td>3</td><td>14.50 – 15.25</td></tr>
+            <tr><td>4</td><td>15.40 – 16.15</td></tr>
+            <tr><td>5</td><td>16.20 – 16.55</td></tr>
+          </table>
+          <div class="schedule-note">0 урок (понедельник) — начальная школа, «Разговоры о важном».</div>
+        </div>
+      </div>
+    </div>
+    <div class="schedule-content hidden" id="tab-saturday">
+      <table class="schedule-table">
+        <tr><th>Урок</th><th>Время</th></tr>
+        <tr><td>1</td><td>08.00 – 08.40</td></tr>
+        <tr><td>2</td><td>08.45 – 09.25</td></tr>
+        <tr><td>3</td><td>09.30 – 10.10</td></tr>
+        <tr><td>4</td><td>10.20 – 11.00</td></tr>
+        <tr><td>5</td><td>11.05 – 11.45</td></tr>
+        <tr><td>6</td><td>11.50 – 12.30</td></tr>
+        <tr><td>7</td><td>12.35 – 13.15</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+<script id="floor-data">
+window.FLOOR_DATA = {
+  1: {
+    viewBox: "0 0 502 426",
+    width: 502, height: 426,
+    markup: `
+<line x1="1" y1="402.5" x2="501" y2="402.5" stroke-width="3" stroke="black"/>
+<line x1="1" y1="2.49997" x2="500" y2="2.49999" stroke-width="3" stroke="black"/>
+<line x1="499.5" y1="404" x2="499.5" y2="303" stroke-width="3" stroke="black"/>
+<line x1="2.5" y1="404" x2="2.5" y2="303" stroke-width="3" stroke="black"/>
+<line x1="2.5" y1="4" x2="2.49999" y2="104" stroke-width="3" stroke="black"/>
+<line x1="499.5" y1="1" x2="499.5" y2="106" stroke-width="3" stroke="black"/>
+<line x1="501" y1="304.5" x2="301" y2="304.5" stroke-width="3" stroke="black"/>
+<line x1="501" y1="104.5" x2="301" y2="104.5" stroke-width="3" stroke="black"/>
+<line x1="1" y1="104.5" x2="201" y2="104.5" stroke-width="3" stroke="black"/>
+<line x1="1" y1="304.5" x2="201" y2="304.5" stroke-width="3" stroke="black"/>
+<line x1="199.5" y1="304" x2="199.5" y2="104" stroke-width="3" stroke="black"/>
+<line x1="299.5" y1="304" x2="299.5" y2="104" stroke-width="3" stroke="black"/>
+<line x1="298.5" y1="404" x2="298.5" y2="426" stroke-width="3" stroke="black"/>
+<line x1="200.5" y1="404" x2="200.5" y2="424" stroke-width="3" stroke="black"/>
+<line x1="299" y1="424.5" x2="199" y2="424.5" stroke-width="3" stroke="black"/>
+<line x1="289" y1="422.5" x2="209" y2="422.5" stroke="black"/>
+<line x1="289" y1="420.5" x2="209" y2="420.5" stroke="black"/>
+<line x1="289" y1="418.5" x2="209" y2="418.5" stroke="black"/>
+<line x1="289" y1="416.5" x2="209" y2="416.5" stroke="black"/>
+<line x1="289.5" y1="424" x2="289.5" y2="404" stroke-width="3" stroke="black"/>
+<line x1="208.5" y1="424" x2="208.5" y2="404" stroke-width="3" stroke="black"/>
+<line x1="201" y1="304.5" x2="251" y2="304.5" stroke-width="3" stroke="black"/>
+<line x1="300.5" y1="299" x2="300.5" y2="269" stroke-width="3" stroke="black"/>
+<line x1="305" y1="303.5" x2="330" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="339" y1="303.5" x2="364" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="377" y1="303.5" x2="402" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="447" y1="303.5" x2="472" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="412" y1="303.5" x2="437" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="377" y1="403.5" x2="402" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="307" y1="403.5" x2="332" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="338" y1="403.5" x2="363" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="407" y1="403.5" x2="432" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="437" y1="403.5" x2="462" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="467" y1="403.5" x2="492" y2="403.5" stroke-width="3" stroke="black"/>
+<path d="M302 234V264H301V234H302Z" fill="black"/>
+<line x1="302.5" y1="109" x2="302.5" y2="139" stroke-width="3" stroke="black"/>
+<line x1="302.5" y1="144" x2="302.5" y2="174" stroke-width="3" stroke="black"/>
+<line x1="314.5" y1="229" x2="314.5" y2="179" stroke-width="3" stroke="black"/>
+<line x1="301" y1="228.5" x2="316" y2="228.5" stroke-width="3" stroke="black"/>
+<line x1="301" y1="178.5" x2="316" y2="178.5" stroke-width="3" stroke="black"/>
+<line x1="301" y1="181.5" x2="315" y2="181.5" stroke-width="3" stroke="black"/>
+<line x1="315" y1="224.5" x2="301" y2="224.5" stroke-width="3" stroke="black"/>
+<line x1="198.5" y1="276" x2="198.5" y2="246" stroke-width="3" stroke="black"/>
+<line x1="198.5" y1="241" x2="198.5" y2="211" stroke-width="3" stroke="black"/>
+<line x1="198.5" y1="184" x2="198.5" y2="158" stroke-width="3" stroke="black"/>
+<line x1="198.5" y1="153" x2="198.5" y2="128" stroke-width="3" stroke="black"/>
+<line x1="500.5" y1="64" x2="500.5" y2="42" stroke-width="3" stroke="black"/>
+<path d="M201 104.5L251 104.5" stroke-width="3" stroke="black"/>
+<path d="M201 401V306H368V401H201Z" fill="white"/>
+<path d="M145 103V36H498V103H145Z" fill="white"/>
+<path d="M4 103V36H142V103H4Z" fill="white"/>
+<rect x="251" y="103" width="47" height="200" fill="white"/>
+<rect x="301" y="179" width="13" height="2" fill="white"/>
+<rect x="301" y="225" width="13" height="3" fill="white"/>
+<rect x="291" y="404" width="7" height="20" fill="white"/>
+<rect x="201" y="404" width="7" height="20" fill="white"/>
+<rect x="210" y="423" width="79" height="1" fill="white"/>
+<rect x="210" y="404" width="79" height="12" fill="white"/>
+<rect x="210" y="417" width="79" height="1" fill="white"/>
+<rect x="210" y="419" width="79" height="1" fill="white"/>
+<rect x="210" y="421" width="79" height="1" fill="white"/>
+<line x1="202.5" y1="403" x2="202.5" y2="404" stroke-width="3" stroke="black"/>
+<line x1="197" y1="403.5" x2="182" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="102" y1="403.5" x2="87" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="83" y1="403.5" x2="68" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="140" y1="403.5" x2="125" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="121" y1="403.5" x2="106" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="159" y1="403.5" x2="144" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="178" y1="403.5" x2="163" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="64" y1="403.5" x2="49" y2="403.5" stroke-width="3" stroke="black"/>
+<line x1="44.9995" y1="403.5" x2="30" y2="403.5" stroke-width="3" stroke="black"/>
+<path d="M26 403.5H11" stroke-width="3" stroke="black"/>
+<line x1="100" y1="303.5" x2="85" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="81" y1="303.5" x2="66" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="138" y1="303.5" x2="123" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="119" y1="303.5" x2="104" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="157" y1="303.5" x2="142" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="177" y1="303.5" x2="162" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="196" y1="303.5" x2="181" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="62" y1="303.5" x2="47" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="42.9995" y1="303.5" x2="28" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="24" y1="303.5" x2="9.00002" y2="303.5" stroke-width="3" stroke="black"/>
+<line x1="312.5" y1="225" x2="312.5" y2="182" stroke="black"/>
+<line x1="310.5" y1="225" x2="310.5" y2="182" stroke="black"/>
+<line x1="308.5" y1="225" x2="308.5" y2="182" stroke="black"/>
+<line x1="306.5" y1="225" x2="306.5" y2="182" stroke="black"/>
+<line x1="249.5" y1="303" x2="249.5" y2="103" stroke-width="3" stroke="black"/>
+<line x1="301" y1="104.5" x2="291" y2="104.5" stroke-width="3" stroke="black"/>
+<line x1="271" y1="104.5" x2="251" y2="104.5" stroke-width="3" stroke="black"/>
+<line x1="301" y1="304.5" x2="288" y2="304.5" stroke-width="3" stroke="black"/>
+<line x1="271" y1="304.5" x2="251" y2="304.5" stroke-width="3" stroke="black"/>
+<rect x="271" y="303" width="17" height="3" fill="white"/>
+<line x1="271" y1="304.5" x2="288" y2="304.5" stroke="black"/>
+<line x1="271" y1="104.5" x2="291" y2="104.5" stroke="black"/>
+<line x1="201" y1="204.5" x2="248" y2="204.5" stroke-width="3" stroke="black"/>
+<line x1="201" y1="190.5" x2="248" y2="190.5" stroke-width="3" stroke="black"/>
+<line x1="250.5" y1="264" x2="250.5" y2="272" stroke="white"/>
+<line x1="248.5" y1="264" x2="248.5" y2="272" stroke="white"/>
+<line x1="235" y1="189.5" x2="243" y2="189.5" stroke="white"/>
+<line x1="235" y1="203.5" x2="243" y2="203.5" stroke="white"/>
+<line x1="237" y1="305.5" x2="244" y2="305.5" stroke="white"/>
+<line x1="237" y1="303.5" x2="244" y2="303.5" stroke="white"/>
+<line x1="235" y1="205.5" x2="243" y2="205.5" stroke="white"/>
+<line x1="235" y1="105.5" x2="243" y2="105.5" stroke="white"/>
+<line x1="235" y1="103.5" x2="243" y2="103.5" stroke="white"/>
+<line x1="235" y1="191.5" x2="243" y2="191.5" stroke="white"/>
+<line x1="178.5" y1="106" x2="178.5" y2="123" stroke-width="3" stroke="black"/>
+<line x1="199" y1="121.5" x2="178" y2="121.5" stroke-width="3" stroke="black"/>
+<rect x="180" y="106" width="18" height="14" fill="white"/>
+<line x1="196" y1="122.5" x2="190" y2="122.5" stroke="#FCF2DA"/>
+<line x1="196" y1="103.5" x2="192" y2="103.5" stroke="white"/>
+<line x1="196" y1="105.5" x2="192" y2="105.5" stroke="white"/>
+<line x1="196" y1="120.5" x2="190" y2="120.5" stroke="white"/>
+<line x1="199.484" y1="306" x2="199.484" y2="403" stroke-width="3" stroke="black"/>
+<line x1="224" y1="306" x2="224" y2="329" stroke-width="2" stroke="black"/>
+<line x1="223" y1="328.5" x2="201" y2="328.5" stroke="black"/>
+<line x1="223" y1="322.5" x2="201" y2="322.5" stroke="black"/>
+<line x1="223" y1="324.5" x2="201" y2="324.5" stroke="black"/>
+<line x1="223" y1="326.5" x2="201" y2="326.5" stroke="black"/>
+<line x1="200.5" y1="308" x2="200.5" y2="318" stroke="white"/>
+<line x1="198.5" y1="308" x2="198.5" y2="318" stroke="white"/>
+<line x1="244" y1="403.5" x2="253" y2="403.5" stroke="white"/>
+<line x1="257" y1="401.5" x2="266" y2="401.5" stroke="white"/>
+<line x1="257" y1="403.5" x2="266" y2="403.5" stroke="white"/>
+<line x1="231" y1="401.5" x2="240" y2="401.5" stroke="white"/>
+<line x1="231" y1="403.5" x2="240" y2="403.5" stroke="white"/>
+<line x1="244" y1="401.5" x2="253" y2="401.5" stroke="white"/>
+<line x1="299.5" y1="303" x2="299.5" y2="401" stroke-width="3" stroke="black"/>
+<line x1="298.5" y1="308" x2="298.5" y2="318" stroke="white"/>
+<line x1="300.5" y1="308" x2="300.5" y2="318" stroke="white"/>
+<line x1="227" y1="382.5" x2="300" y2="382.5" stroke-width="3" stroke="black"/>
+<line x1="255" y1="383" x2="255" y2="402" stroke-width="2" stroke="black"/>
+<line x1="242" y1="383" x2="242" y2="402" stroke-width="2" stroke="black"/>
+<line x1="244" y1="383.5" x2="253" y2="383.5" stroke="white"/>
+<line x1="231" y1="381.5" x2="240" y2="381.5" stroke="white"/>
+<line x1="231" y1="383.5" x2="240" y2="383.5" stroke="white"/>
+<line x1="257" y1="381.5" x2="266" y2="381.5" stroke="white"/>
+<line x1="257" y1="383.5" x2="266" y2="383.5" stroke="white"/>
+<line x1="244" y1="381.5" x2="253" y2="381.5" stroke="white"/>
+<line x1="301" y1="368.5" x2="371" y2="368.5" stroke-width="3" stroke="black"/>
+<line x1="369.5" y1="369" x2="369.5" y2="402" stroke-width="3" stroke="black"/>
+<line x1="370.5" y1="386" x2="370.5" y2="396" stroke="white"/>
+<line x1="368.5" y1="386" x2="368.5" y2="396" stroke="white"/>
+<line x1="500" y1="303" x2="500" y2="289" stroke-width="2" stroke="black"/>
+<line x1="479" y1="290" x2="499" y2="290" stroke-width="2" stroke="black"/>
+<rect x="479" y="291" width="20" height="12" fill="white"/>
+<line x1="480" y1="291" x2="480" y2="303" stroke-width="2" stroke="black"/>
+<line x1="482.5" y1="291" x2="482.5" y2="303" stroke="black"/>
+<line x1="486.5" y1="291" x2="486.5" y2="303" stroke="black"/>
+<line x1="484.5" y1="291" x2="484.5" y2="303" stroke="black"/>
+<line x1="490" y1="305.5" x2="496" y2="305.5" stroke="white"/>
+<line x1="490" y1="303.5" x2="496" y2="303.5" stroke="white"/>
+<line x1="369.5" y1="367" x2="369.5" y2="306" stroke-width="3" stroke="black"/>
+<line x1="299" y1="320.5" x2="369" y2="320.5" stroke-width="3" stroke="black"/>
+<line x1="348.5" y1="368" x2="348.5" y2="321" stroke-width="3" stroke="black"/>
+<line x1="320.5" y1="370" x2="320.5" y2="321" stroke-width="3" stroke="black"/>
+<line x1="299" y1="330.5" x2="369" y2="330.5" stroke-width="3" stroke="black"/>
+<line x1="334.5" y1="367" x2="334.5" y2="319" stroke-width="3" stroke="black"/>
+<line x1="324" y1="320.5" x2="331" y2="320.5" stroke-width="3" stroke="white"/>
+<line x1="325" y1="329.5" x2="330" y2="329.5" stroke="white"/>
+<line x1="325" y1="331.5" x2="330" y2="331.5" stroke="white"/>
+<line x1="339" y1="329.5" x2="344" y2="329.5" stroke="white"/>
+<line x1="349.5" y1="328" x2="349.5" y2="323" stroke="white"/>
+<line x1="319.5" y1="328" x2="319.5" y2="323" stroke="white"/>
+<line x1="347.5" y1="328" x2="347.5" y2="323" stroke="white"/>
+<line x1="321.5" y1="328" x2="321.5" y2="323" stroke="white"/>
+<line x1="339" y1="331.5" x2="344" y2="331.5" stroke="white"/>
+<line x1="338" y1="320.5" x2="345" y2="320.5" stroke-width="3" stroke="white"/>
+<line x1="350" y1="330.5" x2="368" y2="330.5" stroke-width="3" stroke="white"/>
+<line x1="301" y1="330.5" x2="319" y2="330.5" stroke-width="3" stroke="white"/>
+<line x1="322" y1="345.5" x2="347" y2="345.5" stroke-width="3" stroke="black"/>
+<line x1="368.5" y1="308" x2="368.5" y2="318" stroke="white"/>
+<rect x="301" y="183" width="13" height="40" fill="white"/>
+<line x1="370.5" y1="308" x2="370.5" y2="318" stroke="white"/>
+<line x1="1" y1="34.5" x2="499" y2="34.5" stroke-width="3" stroke="black"/>
+<line x1="299.5" y1="70" x2="299.5" y2="103" stroke-width="3" stroke="black"/>
+<line x1="354.5" y1="70" x2="354.5" y2="103" stroke-width="3" stroke="black"/>
+<line x1="383.5" y1="70" x2="383.5" y2="103" stroke-width="3" stroke="black"/>
+<line x1="199.5" y1="70" x2="199.5" y2="103" stroke-width="3" stroke="black"/>
+<line x1="75.5" y1="2" x2="75.5" y2="34" stroke-width="3" stroke="black"/>
+<line x1="110.5" y1="4" x2="110.5" y2="36" stroke-width="3" stroke="black"/>
+<line x1="179.5" y1="2" x2="179.5" y2="34" stroke-width="3" stroke="black"/>
+<line x1="252.5" y1="4" x2="252.5" y2="33" stroke-width="3" stroke="black"/>
+<line x1="331.5" y1="1" x2="331.5" y2="33" stroke-width="3" stroke="black"/>
+<line x1="412.5" y1="2" x2="412.5" y2="34" stroke-width="3" stroke="black"/>
+<path d="M199 71.5L144 71.5" stroke-width="3" stroke="black"/>
+<line x1="385" y1="71.5" x2="300" y2="71.5" stroke-width="3" stroke="black"/>
+<line x1="143.5" y1="34" x2="143.5" y2="104" stroke-width="3" stroke="black"/>
+<line x1="54" y1="71.5" x2="4" y2="71.5" stroke-width="3" stroke="black"/>
+<line x1="498" y1="72.5" x2="448" y2="72.5" stroke-width="3" stroke="black"/>
+<line x1="449.5" y1="105" x2="449.5" y2="72" stroke-width="3" stroke="black"/>
+<line x1="466.5" y1="105" x2="466.5" y2="72" stroke-width="3" stroke="black"/>
+<line x1="482.5" y1="105" x2="482.5" y2="72" stroke-width="3" stroke="black"/>
+<line x1="52.5" y1="105" x2="52.5" y2="72" stroke-width="3" stroke="black"/>
+<line x1="21.5" y1="104" x2="21.5" y2="71" stroke-width="3" stroke="black"/>
+<line x1="33.5" y1="104" x2="33.5" y2="71" stroke-width="3" stroke="black"/>
+<line x1="25" y1="70.5" x2="30" y2="70.5" stroke="white"/>
+<line x1="25" y1="72.5" x2="30" y2="72.5" stroke="white"/>
+<line x1="43" y1="72.5" x2="49" y2="72.5" stroke="white"/>
+<line x1="7" y1="70.5" x2="13" y2="70.5" stroke="white"/>
+<line x1="7" y1="72.5" x2="13" y2="72.5" stroke="white"/>
+<line x1="43" y1="70.5" x2="49" y2="70.5" stroke="white"/>
+<line x1="69" y1="35.5" x2="61" y2="35.5" stroke="white"/>
+<line x1="98" y1="33.5" x2="90" y2="33.5" stroke="white"/>
+<line x1="98" y1="35.5" x2="90" y2="35.5" stroke="white"/>
+<line x1="171" y1="35.5" x2="163" y2="35.5" stroke="white"/>
+<line x1="144.5" y1="58" x2="144.5" y2="48" stroke="white"/>
+<line x1="142.5" y1="58" x2="142.5" y2="48" stroke="white"/>
+<line x1="171" y1="33.5" x2="163" y2="33.5" stroke="white"/>
+<line x1="243" y1="35.5" x2="235" y2="35.5" stroke="white"/>
+<line x1="323" y1="35.5" x2="315" y2="35.5" stroke="white"/>
+<line x1="323" y1="33.5" x2="315" y2="33.5" stroke="white"/>
+<line x1="243" y1="33.5" x2="235" y2="33.5" stroke="white"/>
+<line x1="69" y1="33.5" x2="61" y2="33.5" stroke="white"/>
+<line x1="405" y1="35.5" x2="397" y2="35.5" stroke="white"/>
+<line x1="373" y1="72.5" x2="365" y2="72.5" stroke="white"/>
+<line x1="373" y1="70.5" x2="365" y2="70.5" stroke="white"/>
+<line x1="405" y1="33.5" x2="397" y2="33.5" stroke="white"/>
+<line x1="429" y1="33.5" x2="421" y2="33.5" stroke="white"/>
+<line x1="429" y1="35.5" x2="421" y2="35.5" stroke="white"/>
+<line x1="461" y1="73.5" x2="455" y2="73.5" stroke="white"/>
+<line x1="461" y1="71.5" x2="455" y2="71.5" stroke="white"/>
+<line x1="494" y1="71.5" x2="488" y2="71.5" stroke="white"/>
+<line x1="494" y1="73.5" x2="488" y2="73.5" stroke="white"/>
+<line x1="477" y1="73.5" x2="472" y2="73.5" stroke="white"/>
+<line x1="477" y1="71.5" x2="472" y2="71.5" stroke="white"/>
+<line x1="467.646" y1="76.6464" x2="471.646" y2="72.6464" stroke="black"/>
+<line x1="467.646" y1="79.6464" x2="474.646" y2="72.6464" stroke="black"/>
+<line x1="466.646" y1="83.6464" x2="477.646" y2="72.6464" stroke="black"/>
+<line x1="466.646" y1="86.6464" x2="480.646" y2="72.6464" stroke="black"/>
+<line x1="467.646" y1="94.6464" x2="481.646" y2="80.6464" stroke="black"/>
+<line x1="469.646" y1="104.646" x2="482.646" y2="91.6464" stroke="black"/>
+<line x1="473.646" y1="103.646" x2="482.646" y2="94.6464" stroke="black"/>
+<line x1="476.646" y1="103.646" x2="481.646" y2="98.6464" stroke="black"/>
+<line x1="478.646" y1="104.646" x2="482.646" y2="100.646" stroke="black"/>
+<line x1="467.646" y1="103.646" x2="481.646" y2="89.6464" stroke="black"/>
+<line x1="467.646" y1="100.646" x2="481.646" y2="86.6464" stroke="black"/>
+<line x1="467.646" y1="97.6464" x2="481.646" y2="83.6464" stroke="black"/>
+<line x1="467.646" y1="91.6464" x2="481.646" y2="77.6464" stroke="black"/>
+<line x1="467.646" y1="88.6464" x2="481.646" y2="74.6464" stroke="black"/>
+<rect width="25" height="20" transform="translate(322 347)" fill="black"/>
+<line x1="312.5" y1="182" x2="312.5" y2="224" stroke="black"/>
+<line x1="308.5" y1="182" x2="308.5" y2="224" stroke="black"/>
+<line x1="310.5" y1="182" x2="310.5" y2="224" stroke="black"/>
+<line x1="200" y1="282.5" x2="249" y2="282.5" stroke-width="3" stroke="black"/>
+<line x1="199.5" y1="81" x2="199.5" y2="95" stroke-width="3" stroke="white"/>
+<line x1="299.5" y1="79" x2="299.5" y2="93" stroke-width="3" stroke="white"/>
+<line x1="1.5" y1="64" x2="1.5" y2="42" stroke-width="3" stroke="black"/>
+<line x1="18" y1="105.5" x2="6.00002" y2="105.5" stroke-width="3" stroke="black"/>
+<line x1="50" y1="105.5" x2="38" y2="105.5" stroke-width="3" stroke="black"/>
+<line x1="82" y1="105.5" x2="59" y2="105.5" stroke-width="3" stroke="black"/>
+<line x1="25.0026" y1="1.5" x2="7.00266" y2="1.53173" stroke-width="3" stroke="black"/>
+<line x1="48" y1="1.5" x2="30" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="71" y1="1.5" x2="53" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="133" y1="1.5" x2="115" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="154" y1="1.5" x2="136" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="175" y1="1.5" x2="157" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="203" y1="1.5" x2="185" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="225" y1="1.5" x2="207" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="247" y1="1.5" x2="229" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="278" y1="1.5" x2="258" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="302" y1="1.5" x2="282" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="326" y1="1.5" x2="306" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="105" y1="1.5" x2="95" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="91" y1="1.5" x2="81" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="109" y1="105.5" x2="87" y2="105.5" stroke-width="3" stroke="black"/>
+<line x1="137" y1="105.5" x2="114" y2="105.5" stroke-width="3" stroke="black"/>
+<line x1="23" y1="95" x2="32" y2="95" stroke-width="20" stroke="black"/>
+<line x1="228" y1="401" x2="228" y2="360" stroke-width="2" stroke="black"/>
+<line x1="210.5" y1="360" x2="210.5" y2="393" stroke="black"/>
+<line x1="217" y1="392.5" x2="211" y2="392.5" stroke="black"/>
+<line x1="217.5" y1="360" x2="217.5" y2="393" stroke="black"/>
+<line x1="210" y1="362.5" x2="201" y2="362.5" stroke="black"/>
+<line x1="227" y1="378.5" x2="218" y2="378.5" stroke="black"/>
+<line x1="227" y1="375.5" x2="218" y2="375.5" stroke="black"/>
+<line x1="227" y1="360.5" x2="218" y2="360.5" stroke="black"/>
+<line x1="227" y1="363.5" x2="218" y2="363.5" stroke="black"/>
+<line x1="227" y1="366.5" x2="218" y2="366.5" stroke="black"/>
+<line x1="227" y1="369.5" x2="218" y2="369.5" stroke="black"/>
+<line x1="227" y1="372.5" x2="218" y2="372.5" stroke="black"/>
+<line x1="227" y1="381.5" x2="218" y2="381.5" stroke="black"/>
+<line x1="227" y1="384.5" x2="218" y2="384.5" stroke="black"/>
+<line x1="227" y1="387.5" x2="218" y2="387.5" stroke="black"/>
+<line x1="227" y1="390.5" x2="218" y2="390.5" stroke="black"/>
+<line x1="210" y1="392.5" x2="201" y2="392.5" stroke="black"/>
+<line x1="210" y1="389.5" x2="201" y2="389.5" stroke="black"/>
+<line x1="210" y1="386.5" x2="201" y2="386.5" stroke="black"/>
+<line x1="210" y1="383.5" x2="201" y2="383.5" stroke="black"/>
+<line x1="210" y1="380.5" x2="201" y2="380.5" stroke="black"/>
+<line x1="210" y1="377.5" x2="201" y2="377.5" stroke="black"/>
+<line x1="210" y1="374.5" x2="201" y2="374.5" stroke="black"/>
+<line x1="210" y1="371.5" x2="201" y2="371.5" stroke="black"/>
+<line x1="210" y1="368.5" x2="201" y2="368.5" stroke="black"/>
+<line x1="210" y1="365.5" x2="201" y2="365.5" stroke="black"/>
+<line x1="162.5" y1="73" x2="162.5" y2="83" stroke="black"/>
+<line x1="157.5" y1="93" x2="157.5" y2="103" stroke="black"/>
+<line x1="163.5" y1="93" x2="163.5" y2="103" stroke="black"/>
+<line x1="187.5" y1="93" x2="187.5" y2="103" stroke="black"/>
+<line x1="184.5" y1="93" x2="184.5" y2="103" stroke="black"/>
+<line x1="181.5" y1="93" x2="181.5" y2="103" stroke="black"/>
+<line x1="178.5" y1="93" x2="178.5" y2="103" stroke="black"/>
+<line x1="175.5" y1="93" x2="175.5" y2="103" stroke="black"/>
+<line x1="172.5" y1="93" x2="172.5" y2="103" stroke="black"/>
+<line x1="169.5" y1="93" x2="169.5" y2="103" stroke="black"/>
+<line x1="166.5" y1="93" x2="166.5" y2="103" stroke="black"/>
+<line x1="160.5" y1="93" x2="160.5" y2="103" stroke="black"/>
+<line x1="156.5" y1="84" x2="156.5" y2="92" stroke="black"/>
+<line x1="191" y1="83.5" x2="156" y2="83.5" stroke="black"/>
+<line x1="191" y1="92.5" x2="156" y2="92.5" stroke="black"/>
+<line x1="190.5" y1="103" x2="190.5" y2="93" stroke="black"/>
+<line x1="159.5" y1="73" x2="159.5" y2="83" stroke="black"/>
+<line x1="156.5" y1="73" x2="156.5" y2="83" stroke="black"/>
+<line x1="309.5" y1="83" x2="309.5" y2="73" stroke="black"/>
+<line x1="308" y1="82.5" x2="343" y2="82.5" stroke="black"/>
+<line x1="308" y1="92.5" x2="343" y2="92.5" stroke="black"/>
+<line x1="342.5" y1="93" x2="342.5" y2="73" stroke="black"/>
+<line x1="339.5" y1="83" x2="339.5" y2="73" stroke="black"/>
+<line x1="341.5" y1="103" x2="341.5" y2="93" stroke="black"/>
+<line x1="308.5" y1="103" x2="308.5" y2="93" stroke="black"/>
+<line x1="311.5" y1="103" x2="311.5" y2="93" stroke="black"/>
+<line x1="314.5" y1="103" x2="314.5" y2="93" stroke="black"/>
+<line x1="317.5" y1="103" x2="317.5" y2="93" stroke="black"/>
+<line x1="320.5" y1="103" x2="320.5" y2="93" stroke="black"/>
+<line x1="323.5" y1="103" x2="323.5" y2="93" stroke="black"/>
+<line x1="326.5" y1="103" x2="326.5" y2="93" stroke="black"/>
+<line x1="338.5" y1="103" x2="338.5" y2="93" stroke="black"/>
+<line x1="329.5" y1="103" x2="329.5" y2="93" stroke="black"/>
+<line x1="332.5" y1="103" x2="332.5" y2="93" stroke="black"/>
+<line x1="335.5" y1="103" x2="335.5" y2="93" stroke="black"/>
+<line x1="336.5" y1="83" x2="336.5" y2="73" stroke="black"/>
+<line x1="333.5" y1="83" x2="333.5" y2="73" stroke="black"/>
+<line x1="330.5" y1="83" x2="330.5" y2="73" stroke="black"/>
+<line x1="327.5" y1="83" x2="327.5" y2="73" stroke="black"/>
+<line x1="324.5" y1="83" x2="324.5" y2="73" stroke="black"/>
+<line x1="321.5" y1="83" x2="321.5" y2="73" stroke="black"/>
+<line x1="318.5" y1="83" x2="318.5" y2="73" stroke="black"/>
+<line x1="315.5" y1="83" x2="315.5" y2="73" stroke="black"/>
+<line x1="312.5" y1="83" x2="312.5" y2="73" stroke="black"/>
+<line x1="189.5" y1="73" x2="189.5" y2="83" stroke="black"/>
+<line x1="165.5" y1="73" x2="165.5" y2="83" stroke="black"/>
+<line x1="168.5" y1="73" x2="168.5" y2="83" stroke="black"/>
+<line x1="171.5" y1="73" x2="171.5" y2="83" stroke="black"/>
+<line x1="174.5" y1="73" x2="174.5" y2="83" stroke="black"/>
+<line x1="177.5" y1="73" x2="177.5" y2="83" stroke="black"/>
+<line x1="180.5" y1="73" x2="180.5" y2="83" stroke="black"/>
+<line x1="183.5" y1="73" x2="183.5" y2="83" stroke="black"/>
+<line x1="186.5" y1="73" x2="186.5" y2="83" stroke="black"/>
+<line x1="358" y1="1.5" x2="338" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="382" y1="1.5" x2="362" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="406" y1="1.5" x2="386" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="440" y1="1.5" x2="419" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="467" y1="1.54893" x2="445" y2="1.54893" stroke-width="3" stroke="black"/>
+<line x1="493" y1="1.5" x2="472" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="199.5" y1="78" x2="199.5" y2="96" stroke="black"/>
+<line x1="299.5" y1="74" x2="299.5" y2="98" stroke="black"/>
+<rect x="356" y="73" width="26" height="30" fill="white"/>
+<rect x="414" y="4" width="84" height="29" fill="#FEFEFE"/>
+<rect x="333" y="4" width="78" height="29" fill="white"/>
+<rect x="254" y="4" width="76" height="29" fill="white"/>
+<rect x="181" y="4" width="70" height="29" fill="white"/>
+<rect x="112" y="4" width="66" height="29" fill="white"/>
+<rect x="77" y="4" width="32" height="29" fill="white"/>
+<rect x="4" y="4" width="70" height="29" fill="white"/>
+<rect x="201" y="106" width="47" height="83" fill="white"/>
+<rect x="201" y="192" width="47" height="11" fill="white"/>
+<rect x="201" y="206" width="47" height="75" fill="white"/>
+<rect x="201" y="284" width="47" height="19" fill="white"/>
+<rect x="4" y="306" width="194" height="95" fill="white"/>
+<rect x="301" y="370" width="67" height="31" fill="white"/>
+<rect x="371" y="306" width="127" height="95" fill="white"/>
+
+<g transform="translate(484 80) scale(0.7)" fill="black">
+  <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,12 L13,12 L13,16 L14,22 L11,22 L10,17 L9,22 L6,22 L7,16 L7,12 L5,12 Z"/>
+</g>
+<g transform="translate(451 80) scale(0.7)" fill="black">
+  <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,13 L12,13 L12,16 L15,22 L12,22 L10,17 L8,22 L5,22 L8,16 L8,13 L5,13 Z"/>
+</g>
+<g transform="translate(337.5 333) scale(0.4)" fill="black">
+  <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,12 L13,12 L13,16 L14,22 L11,22 L10,17 L9,22 L6,22 L7,16 L7,12 L5,12 Z"/>
+</g>
+<g transform="translate(323.5 333) scale(0.4)" fill="black">
+  <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,13 L12,13 L12,16 L15,22 L12,22 L10,17 L8,22 L5,22 L8,16 L8,13 L5,13 Z"/>
+</g>
+<!-- Мужская -->
+<g transform="translate(347 330) scale(1)">
+  <path d="M12 2C13.1 2 14 2.9 14 4C14 5.1 13.1 6 12 6C10.9 6 10 5.1 10 4C10 2.9 10.9 2 12 2ZM9 7H15L17 14H15L15 18L16 24H13L12 19L11 24H8L9 18V14H7L9 7Z" fill="black"/>
+</g>
+
+<!-- Женская -->
+<g transform="translate(298 330) scale(1)">
+  <path d="M12 2C13.1 2 14 2.9 14 4C14 5.1 13.1 6 12 6C10.9 6 10 5.1 10 4C10 2.9 10.9 2 12 2ZM9 7H15L17 15H14L14 18L17 24H14L12 19L10 24H7L10 18V15H7L9 7Z" fill="black"/>
+</g>`
+  },
+  2: {
+    viewBox: "0 0 503 404",
+    width: 503, height: 404,
+    markup: `
+<line x1="1.5" y1="404" x2="1.5" y2="303" stroke-width="3" stroke="black"/>
+<line x1="1.5" y1="106" x2="1.5" y2="4.57108e-05" stroke-width="3" stroke="black"/>
+<line x1="501.5" y1="105" x2="501.5" y2="1.00005" stroke-width="3" stroke="black"/>
+<line x1="501.5" y1="404" x2="501.5" y2="303" stroke-width="3" stroke="black"/>
+<line x1="3" y1="402.5" x2="503" y2="402.5" stroke-width="3" stroke="black"/>
+<line x1="-1.31134e-07" y1="1.50005" x2="503" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="6.55671e-08" y1="304.5" x2="200" y2="304.5" stroke-width="3" stroke="black"/>
+<line x1="6.55671e-08" y1="104.5" x2="200" y2="104.5" stroke-width="3" stroke="black"/>
+<line x1="303" y1="104.5" x2="503" y2="104.5" stroke-width="3" stroke="black"/>
+<line x1="303" y1="304.5" x2="503" y2="304.5" stroke-width="3" stroke="black"/>
+<line x1="198.5" y1="303" x2="198.5" y2="103" stroke-width="3" stroke="black"/>
+<line x1="304.5" y1="303" x2="304.5" y2="103" stroke-width="3" stroke="black"/>
+<rect x="3" y="35" width="497" height="68" fill="white"/>
+<rect x="235" y="124" width="33" height="182" fill="white"/>
+<rect x="200" y="178" width="32" height="68" fill="white"/>
+<rect x="200" y="249" width="32" height="54" fill="white"/>
+<rect x="200" y="103" width="103" height="18" fill="white"/>
+<rect x="147" y="306" width="156" height="95" fill="white"/>
+<line x1="303" y1="304.5" x2="268" y2="304.5" stroke-width="3" stroke="black"/>
+<line x1="235" y1="304.5" x2="200" y2="304.5" stroke-width="3" stroke="black"/>
+<line x1="234" y1="176.5" x2="198" y2="176.5" stroke-width="3" stroke="black"/>
+<line x1="303" y1="209.5" x2="268" y2="209.5" stroke-width="3" stroke="black"/>
+<line x1="232" y1="247.5" x2="197" y2="247.5" stroke-width="3" stroke="black"/>
+<line x1="304" y1="122.5" x2="199" y2="122.5" stroke-width="3" stroke="black"/>
+<line x1="303" y1="104.5" x2="278" y2="104.5" stroke-width="3" stroke="black"/>
+<line x1="279.5" y1="104" x2="279.5" y2="123" stroke-width="3" stroke="black"/>
+<line x1="280.5" y1="111" x2="280.5" y2="116" stroke="white"/>
+<line x1="278.5" y1="111" x2="278.5" y2="116" stroke="white"/>
+<line x1="269.5" y1="123" x2="269.5" y2="304" stroke-width="3" stroke="black"/>
+<line x1="233.5" y1="123" x2="233.5" y2="304" stroke-width="3" stroke="black"/>
+<line x1="240" y1="121.5" x2="263" y2="121.5" stroke="white"/>
+<line x1="240" y1="123.5" x2="263" y2="123.5" stroke="white"/>
+<line x1="234.5" y1="127" x2="234.5" y2="133" stroke="white"/>
+<line x1="234.5" y1="234" x2="234.5" y2="240" stroke="white"/>
+<line x1="232.5" y1="234" x2="232.5" y2="240" stroke="white"/>
+<line x1="232.5" y1="127" x2="232.5" y2="133" stroke="white"/>
+<line x1="234.5" y1="256" x2="234.5" y2="262" stroke="white"/>
+<line x1="270.5" y1="284" x2="270.5" y2="290" stroke="white"/>
+<line x1="268.5" y1="284" x2="268.5" y2="290" stroke="white"/>
+<line x1="270.5" y1="262" x2="270.5" y2="268" stroke="white"/>
+<line x1="270.5" y1="191" x2="270.5" y2="197" stroke="white"/>
+<line x1="268.5" y1="191" x2="268.5" y2="197" stroke="white"/>
+<line x1="270.5" y1="171" x2="270.5" y2="177" stroke="white"/>
+<line x1="268.5" y1="171" x2="268.5" y2="177" stroke="white"/>
+<line x1="268.5" y1="262" x2="268.5" y2="268" stroke="white"/>
+<line x1="232.5" y1="256" x2="232.5" y2="262" stroke="white"/>
+<line x1="232" y1="283" x2="209" y2="283" stroke-width="2" stroke="black"/>
+<line x1="204" y1="283" x2="200" y2="283" stroke-width="2" stroke="black"/>
+<line x1="217" y1="228" x2="199" y2="228" stroke-width="2" stroke="black"/>
+<line x1="233" y1="228" x2="224" y2="228" stroke-width="2" stroke="black"/>
+<line x1="270" y1="186.5" x2="304" y2="186.5" stroke-width="3" stroke="black"/>
+<line x1="269" y1="280.5" x2="303" y2="280.5" stroke-width="3" stroke="black"/>
+<line x1="274" y1="281.5" x2="280" y2="281.5" stroke="white"/>
+<line x1="274" y1="187.5" x2="280" y2="187.5" stroke="white"/>
+<line x1="274" y1="185.5" x2="280" y2="185.5" stroke="white"/>
+<line x1="274" y1="279.5" x2="280" y2="279.5" stroke="white"/>
+<line x1="368.5" y1="403" x2="368.5" y2="305" stroke-width="3" stroke="black"/>
+<rect x="370" y="305" width="130" height="96" fill="black"/>
+<line x1="304.5" y1="306" x2="304.5" y2="363" stroke-width="3" stroke="black"/>
+<line x1="269.5" y1="306" x2="269.5" y2="344" stroke-width="3" stroke="black"/>
+<line x1="269.5" y1="362" x2="269.5" y2="402" stroke-width="3" stroke="black"/>
+<line x1="227.5" y1="360" x2="227.5" y2="401" stroke-width="3" stroke="black"/>
+<line x1="209.5" y1="360" x2="209.5" y2="393" stroke="black"/>
+<line x1="216.5" y1="360" x2="216.5" y2="393" stroke="black"/>
+<line x1="226" y1="360.5" x2="217" y2="360.5" stroke="black"/>
+<line x1="226" y1="363.5" x2="217" y2="363.5" stroke="black"/>
+<line x1="226" y1="369.5" x2="217" y2="369.5" stroke="black"/>
+<line x1="226" y1="372.5" x2="217" y2="372.5" stroke="black"/>
+<line x1="226" y1="366.5" x2="217" y2="366.5" stroke="black"/>
+<line x1="209" y1="392.5" x2="200" y2="392.5" stroke="black"/>
+<line x1="226" y1="390.5" x2="217" y2="390.5" stroke="black"/>
+<line x1="209" y1="389.5" x2="200" y2="389.5" stroke="black"/>
+<line x1="209" y1="386.5" x2="200" y2="386.5" stroke="black"/>
+<line x1="209" y1="383.5" x2="200" y2="383.5" stroke="black"/>
+<line x1="209" y1="380.5" x2="200" y2="380.5" stroke="black"/>
+<line x1="209" y1="377.5" x2="200" y2="377.5" stroke="black"/>
+<line x1="209" y1="374.5" x2="200" y2="374.5" stroke="black"/>
+<line x1="209" y1="371.5" x2="200" y2="371.5" stroke="black"/>
+<line x1="209" y1="368.5" x2="200" y2="368.5" stroke="black"/>
+<line x1="209" y1="365.5" x2="200" y2="365.5" stroke="black"/>
+<line x1="209" y1="362.5" x2="200" y2="362.5" stroke="black"/>
+<line x1="226" y1="387.5" x2="217" y2="387.5" stroke="black"/>
+<line x1="226" y1="384.5" x2="217" y2="384.5" stroke="black"/>
+<line x1="226" y1="381.5" x2="217" y2="381.5" stroke="black"/>
+<line x1="226" y1="378.5" x2="217" y2="378.5" stroke="black"/>
+<line x1="226" y1="375.5" x2="217" y2="375.5" stroke="black"/>
+<line x1="198.5" y1="335" x2="198.5" y2="401" stroke-width="3" stroke="black"/>
+<line x1="145.5" y1="306" x2="145.5" y2="402" stroke-width="3" stroke="black"/>
+<line x1="270" y1="342.5" x2="303" y2="342.5" stroke-width="3" stroke="black"/>
+<line x1="270" y1="323" x2="303" y2="323" stroke-width="2" stroke="black"/>
+<line x1="270.5" y1="329" x2="270.5" y2="335" stroke="white"/>
+<line x1="303.5" y1="349" x2="303.5" y2="355" stroke="white"/>
+<line x1="305.5" y1="349" x2="305.5" y2="355" stroke="white"/>
+<line x1="268.5" y1="329" x2="268.5" y2="335" stroke="white"/>
+<line x1="270.5" y1="311" x2="270.5" y2="317" stroke="white"/>
+<line x1="268.5" y1="311" x2="268.5" y2="317" stroke="white"/>
+<line x1="227" y1="361.5" x2="367" y2="361.5" stroke-width="3" stroke="black"/>
+<line x1="294" y1="360.5" x2="288" y2="360.5" stroke="white"/>
+<line x1="294" y1="362.5" x2="288" y2="362.5" stroke="white"/>
+<line x1="260" y1="362.5" x2="254" y2="362.5" stroke="white"/>
+<line x1="260" y1="360.5" x2="254" y2="360.5" stroke="white"/>
+<line x1="197" y1="336.5" x2="147" y2="336.5" stroke-width="3" stroke="black"/>
+<line x1="146.5" y1="393" x2="146.5" y2="399" stroke="white"/>
+<line x1="144.5" y1="393" x2="144.5" y2="399" stroke="white"/>
+<line x1="146.5" y1="315" x2="146.5" y2="327" stroke="white"/>
+<line x1="144.5" y1="315" x2="144.5" y2="327" stroke="white"/>
+<line x1="216" y1="392.5" x2="210" y2="392.5" stroke="black"/>
+<line x1="64.5" y1="3.00005" x2="64.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="127.5" y1="3.00005" x2="127.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="190.5" y1="3.00005" x2="190.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="2" y1="33.5" x2="500" y2="33.5" stroke-width="3" stroke="black"/>
+<line x1="55" y1="72.5" x2="3" y2="72.5" stroke-width="3" stroke="black"/>
+<line x1="53.5" y1="103" x2="53.5" y2="73" stroke-width="3" stroke="black"/>
+<line x1="27.5" y1="103" x2="27.5" y2="72" stroke-width="3" stroke="black"/>
+<line x1="106.5" y1="103" x2="106.5" y2="70" stroke-width="3" stroke="black"/>
+<line x1="399.5" y1="104" x2="399.5" y2="71" stroke-width="3" stroke="black"/>
+<line x1="459.5" y1="104" x2="459.5" y2="71" stroke-width="3" stroke="black"/>
+<line x1="482" y1="104" x2="482" y2="71" stroke-width="2" stroke="black"/>
+<line x1="198.5" y1="104" x2="198.5" y2="71" stroke-width="3" stroke="black"/>
+<line x1="52.5" y1="91" x2="52.5" y2="99" stroke="white"/>
+<line x1="54.5" y1="91" x2="54.5" y2="99" stroke="white"/>
+<line x1="107.5" y1="92" x2="107.5" y2="100" stroke="white"/>
+<line x1="105.5" y1="92" x2="105.5" y2="100" stroke="white"/>
+<line x1="400.5" y1="92" x2="400.5" y2="100" stroke="white"/>
+<line x1="398.5" y1="92" x2="398.5" y2="100" stroke="white"/>
+<line x1="121" y1="34.5" x2="114" y2="34.5" stroke="white"/>
+<line x1="121" y1="32.5" x2="114" y2="32.5" stroke="white"/>
+<line x1="183" y1="34.5" x2="176" y2="34.5" stroke="white"/>
+<line x1="183" y1="32.5" x2="176" y2="32.5" stroke="white"/>
+<line x1="247" y1="34.5" x2="240" y2="34.5" stroke="white"/>
+<line x1="247" y1="32.5" x2="240" y2="32.5" stroke="white"/>
+<line x1="311" y1="34.5" x2="304" y2="34.5" stroke="white"/>
+<line x1="369" y1="34.5" x2="362" y2="34.5" stroke="white"/>
+<line x1="369" y1="32.5" x2="362" y2="32.5" stroke="white"/>
+<line x1="311" y1="32.5" x2="304" y2="32.5" stroke="white"/>
+<line x1="15" y1="73.5" x2="8" y2="73.5" stroke="white"/>
+<line x1="59" y1="32.5" x2="52" y2="32.5" stroke="white"/>
+<line x1="59" y1="34.5" x2="52" y2="34.5" stroke="white"/>
+<line x1="15" y1="71.5" x2="8" y2="71.5" stroke="white"/>
+<line x1="439.5" y1="3.00005" x2="439.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="379.5" y1="3.00005" x2="379.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="253.5" y1="3.00005" x2="253.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="316.5" y1="3.00005" x2="316.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="432" y1="34.5" x2="425" y2="34.5" stroke="white"/>
+<line x1="432" y1="32.5" x2="425" y2="32.5" stroke="white"/>
+<line x1="453" y1="34.5" x2="446" y2="34.5" stroke="white"/>
+<line x1="453" y1="32.5" x2="446" y2="32.5" stroke="white"/>
+<line x1="105" y1="71.5001" x2="200" y2="71.5" stroke-width="3" stroke="black"/>
+<line x1="141.5" y1="71" x2="141.5" y2="103" stroke-width="3" stroke="black"/>
+<line x1="188.5" y1="73" x2="188.5" y2="83" stroke="black"/>
+<line x1="164.5" y1="73" x2="164.5" y2="83" stroke="black"/>
+<line x1="155.5" y1="73" x2="155.5" y2="83" stroke="black"/>
+<line x1="156.5" y1="93" x2="156.5" y2="103" stroke="black"/>
+<line x1="162.5" y1="93" x2="162.5" y2="103" stroke="black"/>
+<line x1="165.5" y1="93" x2="165.5" y2="103" stroke="black"/>
+<line x1="168.5" y1="93" x2="168.5" y2="103" stroke="black"/>
+<line x1="171.5" y1="93" x2="171.5" y2="103" stroke="black"/>
+<line x1="174.5" y1="93" x2="174.5" y2="103" stroke="black"/>
+<line x1="177.5" y1="93" x2="177.5" y2="103" stroke="black"/>
+<line x1="180.5" y1="93" x2="180.5" y2="103" stroke="black"/>
+<line x1="183.5" y1="93" x2="183.5" y2="103" stroke="black"/>
+<line x1="186.5" y1="93" x2="186.5" y2="103" stroke="black"/>
+<line x1="189.5" y1="93" x2="189.5" y2="103" stroke="black"/>
+<line x1="159.5" y1="93" x2="159.5" y2="103" stroke="black"/>
+<line x1="155.5" y1="84" x2="155.5" y2="92" stroke="black"/>
+<line x1="158.5" y1="73" x2="158.5" y2="83" stroke="black"/>
+<line x1="161.5" y1="73" x2="161.5" y2="83" stroke="black"/>
+<line x1="167.5" y1="73" x2="167.5" y2="83" stroke="black"/>
+<line x1="170.5" y1="73" x2="170.5" y2="83" stroke="black"/>
+<line x1="173.5" y1="73" x2="173.5" y2="83" stroke="black"/>
+<line x1="176.5" y1="73" x2="176.5" y2="83" stroke="black"/>
+<line x1="179.5" y1="73" x2="179.5" y2="83" stroke="black"/>
+<line x1="182.5" y1="73" x2="182.5" y2="83" stroke="black"/>
+<line x1="185.5" y1="73" x2="185.5" y2="83" stroke="black"/>
+<line x1="190" y1="83.5" x2="155" y2="83.5" stroke="black"/>
+<line x1="313" y1="83.5" x2="348" y2="83.5" stroke="black"/>
+<line x1="190" y1="92.5" x2="155" y2="92.5" stroke="black"/>
+<line x1="198.5" y1="81" x2="198.5" y2="95" stroke-width="3" stroke="white"/>
+<line x1="198.5" y1="79" x2="198.5" y2="97" stroke="black"/>
+<line x1="304.5" y1="70" x2="304.5" y2="103" stroke-width="3" stroke="black"/>
+<line x1="314.5" y1="83" x2="314.5" y2="73" stroke="black"/>
+<line x1="320.5" y1="83" x2="320.5" y2="73" stroke="black"/>
+<line x1="323.5" y1="83" x2="323.5" y2="73" stroke="black"/>
+<line x1="326.5" y1="83" x2="326.5" y2="73" stroke="black"/>
+<line x1="329.5" y1="83" x2="329.5" y2="73" stroke="black"/>
+<line x1="332.5" y1="83" x2="332.5" y2="73" stroke="black"/>
+<line x1="335.5" y1="83" x2="335.5" y2="73" stroke="black"/>
+<line x1="338.5" y1="83" x2="338.5" y2="73" stroke="black"/>
+<line x1="341.5" y1="83" x2="341.5" y2="73" stroke="black"/>
+<line x1="344.5" y1="83" x2="344.5" y2="73" stroke="black"/>
+<line x1="346.5" y1="103" x2="346.5" y2="93" stroke="black"/>
+<line x1="343.5" y1="103" x2="343.5" y2="93" stroke="black"/>
+<line x1="340.5" y1="103" x2="340.5" y2="93" stroke="black"/>
+<line x1="337.5" y1="103" x2="337.5" y2="93" stroke="black"/>
+<line x1="334.5" y1="103" x2="334.5" y2="93" stroke="black"/>
+<line x1="331.5" y1="103" x2="331.5" y2="93" stroke="black"/>
+<line x1="325.5" y1="103" x2="325.5" y2="93" stroke="black"/>
+<line x1="322.5" y1="103" x2="322.5" y2="93" stroke="black"/>
+<line x1="319.5" y1="103" x2="319.5" y2="93" stroke="black"/>
+<line x1="316.5" y1="103" x2="316.5" y2="93" stroke="black"/>
+<line x1="313.5" y1="103" x2="313.5" y2="93" stroke="black"/>
+<line x1="328.5" y1="103" x2="328.5" y2="93" stroke="black"/>
+<line x1="347.5" y1="93" x2="347.5" y2="73" stroke="black"/>
+<line x1="313" y1="92.5" x2="348" y2="92.5" stroke="black"/>
+<line x1="317.5" y1="83" x2="317.5" y2="73" stroke="black"/>
+<line x1="304.5" y1="81" x2="304.5" y2="95" stroke-width="3" stroke="#FFFBFB"/>
+<line x1="304.5" y1="79" x2="304.5" y2="97" stroke="black"/>
+<line x1="359.5" y1="73" x2="359.5" y2="103" stroke-width="3" stroke="black"/>
+<line x1="306" y1="71.5001" x2="401" y2="71.5" stroke-width="3" stroke="black"/>
+<line x1="460" y1="72.5" x2="501" y2="72.5" stroke-width="3" stroke="black"/>
+<line x1="465" y1="71.5" x2="472" y2="71.5" stroke="white"/>
+<line x1="465" y1="73.5" x2="472" y2="73.5" stroke="white"/>
+<line x1="488" y1="73.5" x2="495" y2="73.5" stroke="white"/>
+<line x1="488" y1="71.5" x2="495" y2="71.5" stroke="white"/>
+<line x1="159" y1="337.5" x2="169" y2="337.5" stroke="white"/>
+<line x1="159" y1="335.5" x2="169" y2="335.5" stroke="white"/>
+<line x1="482.646" y1="76.6465" x2="485.646" y2="73.6465" stroke="black"/>
+<line x1="482.646" y1="82.6465" x2="492.646" y2="72.6465" stroke="black"/>
+<line x1="488.646" y1="103.646" x2="500.646" y2="91.6465" stroke="black"/>
+<line x1="493.646" y1="104.646" x2="501.646" y2="96.6465" stroke="black"/>
+<line x1="496.646" y1="104.646" x2="502.646" y2="98.6465" stroke="black"/>
+<line x1="491.646" y1="103.646" x2="501.646" y2="93.6465" stroke="black"/>
+<line x1="482.646" y1="85.6465" x2="495.646" y2="72.6465" stroke="black"/>
+<line x1="482.646" y1="88.6465" x2="498.646" y2="72.6465" stroke="black"/>
+<line x1="482.646" y1="94.6465" x2="501.646" y2="75.6465" stroke="black"/>
+<line x1="482.646" y1="100.646" x2="501.646" y2="81.6465" stroke="black"/>
+<line x1="484.646" y1="104.646" x2="500.646" y2="88.6465" stroke="black"/>
+<line x1="482.646" y1="103.646" x2="501.646" y2="84.6465" stroke="black"/>
+<line x1="482.646" y1="97.6465" x2="501.646" y2="78.6465" stroke="black"/>
+<line x1="482.646" y1="91.6465" x2="500.646" y2="73.6465" stroke="black"/>
+<line x1="482.646" y1="79.6465" x2="489.646" y2="72.6465" stroke="black"/>
+<rect x="271" y="363" width="96" height="38" fill="white"/>
+<rect x="306" y="306" width="61" height="54" fill="white"/>
+<rect x="3" y="306" width="141" height="95" fill="white"/>
+<rect x="200" y="124" width="32" height="51" fill="white"/>
+<rect x="271" y="124" width="32" height="61" fill="white"/>
+<rect x="271" y="188" width="32" height="20" fill="white"/>
+<rect x="271" y="282" width="32" height="21" fill="white"/>
+<rect x="271" y="211" width="32" height="68" fill="white"/>
+<rect x="147" y="338" width="50" height="63" fill="white"/>
+<rect x="108" y="73" width="32" height="30" fill="white"/>
+<rect x="29" y="74" width="23" height="29" fill="white"/>
+<rect x="3" y="3.00005" width="60" height="29" fill="white"/>
+<rect x="66" y="3.00005" width="60" height="29" fill="white"/>
+<rect x="129" y="3.00005" width="60" height="29" fill="white"/>
+<rect x="192" y="3.00005" width="60" height="29" fill="white"/>
+<rect x="255" y="3.00005" width="60" height="29" fill="white"/>
+<rect x="318" y="3.00005" width="60" height="29" fill="white"/>
+<rect x="381" y="3.00005" width="57" height="29" fill="white"/>
+<rect x="441" y="3.00005" width="59" height="29" fill="white"/>
+<rect x="361" y="73" width="37" height="30" fill="white"/>
+<rect x="281" y="106" width="22" height="15" fill="white"/>
+
+<!-- Раздевалки -->
+<g transform="translate(462 80) scale(0.9)" fill="black">
+  <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,12 L13,12 L13,16 L14,22 L11,22 L10,17 L9,22 L6,22 L7,16 L7,12 L5,12 Z"/>
+</g>
+<g transform="translate(5 80) scale(0.9)" fill="black">
+  <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,13 L12,13 L12,16 L15,22 L12,22 L10,17 L8,22 L5,22 L8,16 L8,13 L5,13 Z"/>
+</g>
+`
+  },
+  3: {
+    viewBox: "0 0 503 101",
+    width: 503, height: 101,
+    markup: `
+<line x1="1.5" y1="101" x2="1.5" y2="6.55671e-08" stroke-width="3" stroke="black"/>
+<line x1="501.5" y1="101" x2="501.5" y2="6.55671e-08" stroke-width="3" stroke="black"/>
+<line x1="-1.31134e-07" y1="1.50005" x2="503" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="-1.31134e-07" y1="99.5" x2="503" y2="99.5" stroke-width="3" stroke="black"/>
+<rect x="3" y="35" width="497" height="63" fill="white"/>
+<line x1="304.5" y1="65" x2="304.5" y2="98" stroke-width="3" stroke="black"/>
+<line x1="252.5" y1="66" x2="252.5" y2="99" stroke-width="3" stroke="black"/>
+<line x1="201.5" y1="65" x2="201.5" y2="98" stroke-width="3" stroke="black"/>
+<line x1="141.5" y1="65" x2="141.5" y2="98" stroke-width="3" stroke="black"/>
+<line x1="306" y1="66.5" x2="200" y2="66.5" stroke-width="3" stroke="black"/>
+<line x1="306" y1="66.5" x2="366" y2="66.5" stroke-width="3" stroke="black"/>
+<line x1="109" y1="66.5" x2="200" y2="66.5" stroke-width="3" stroke="black"/>
+<line x1="364.5" y1="65" x2="364.5" y2="98" stroke-width="3" stroke="black"/>
+<line x1="438.5" y1="65" x2="438.5" y2="98" stroke-width="3" stroke="black"/>
+<line x1="490.5" y1="66" x2="490.5" y2="99" stroke-width="3" stroke="black"/>
+<line x1="478.5" y1="66" x2="478.5" y2="99" stroke-width="3" stroke="black"/>
+<line x1="466.5" y1="65" x2="466.5" y2="98" stroke-width="3" stroke="black"/>
+<line x1="44.5" y1="65" x2="44.5" y2="98" stroke-width="3" stroke="black"/>
+<line x1="190" y1="78.5" x2="155" y2="78.5" stroke="black"/>
+<line x1="351" y1="78.5" x2="316" y2="78.5" stroke="black"/>
+<line x1="351" y1="87.5" x2="316" y2="87.5" stroke="black"/>
+<line x1="190" y1="87.5" x2="155" y2="87.5" stroke="black"/>
+<line x1="188.5" y1="68" x2="188.5" y2="78" stroke="black"/>
+<line x1="317.5" y1="68" x2="317.5" y2="78" stroke="black"/>
+<line x1="323.5" y1="68" x2="323.5" y2="78" stroke="black"/>
+<line x1="326.5" y1="68" x2="326.5" y2="78" stroke="black"/>
+<line x1="329.5" y1="68" x2="329.5" y2="78" stroke="black"/>
+<line x1="332.5" y1="68" x2="332.5" y2="78" stroke="black"/>
+<line x1="335.5" y1="68" x2="335.5" y2="78" stroke="black"/>
+<line x1="338.5" y1="68" x2="338.5" y2="78" stroke="black"/>
+<line x1="341.5" y1="68" x2="341.5" y2="78" stroke="black"/>
+<line x1="344.5" y1="68" x2="344.5" y2="78" stroke="black"/>
+<line x1="350.5" y1="68" x2="350.5" y2="78" stroke="black"/>
+<line x1="349.5" y1="88" x2="349.5" y2="98" stroke="black"/>
+<line x1="346.5" y1="88" x2="346.5" y2="98" stroke="black"/>
+<line x1="343.5" y1="88" x2="343.5" y2="98" stroke="black"/>
+<line x1="337.5" y1="88" x2="337.5" y2="98" stroke="black"/>
+<line x1="334.5" y1="88" x2="334.5" y2="98" stroke="black"/>
+<line x1="331.5" y1="88" x2="331.5" y2="98" stroke="black"/>
+<line x1="325.5" y1="88" x2="325.5" y2="98" stroke="black"/>
+<line x1="322.5" y1="88" x2="322.5" y2="98" stroke="black"/>
+<line x1="319.5" y1="88" x2="319.5" y2="98" stroke="black"/>
+<line x1="316.5" y1="88" x2="316.5" y2="98" stroke="black"/>
+<line x1="328.5" y1="88" x2="328.5" y2="98" stroke="black"/>
+<line x1="340.5" y1="88" x2="340.5" y2="98" stroke="black"/>
+<line x1="347.5" y1="68" x2="347.5" y2="78" stroke="black"/>
+<line x1="320.5" y1="68" x2="320.5" y2="78" stroke="black"/>
+<line x1="185.5" y1="68" x2="185.5" y2="78" stroke="black"/>
+<line x1="182.5" y1="68" x2="182.5" y2="78" stroke="black"/>
+<line x1="179.5" y1="68" x2="179.5" y2="78" stroke="black"/>
+<line x1="176.5" y1="68" x2="176.5" y2="78" stroke="black"/>
+<line x1="173.5" y1="68" x2="173.5" y2="78" stroke="black"/>
+<line x1="170.5" y1="68" x2="170.5" y2="78" stroke="black"/>
+<line x1="164.5" y1="68" x2="164.5" y2="78" stroke="black"/>
+<line x1="161.5" y1="68" x2="161.5" y2="78" stroke="black"/>
+<line x1="158.5" y1="68" x2="158.5" y2="78" stroke="black"/>
+<line x1="155.5" y1="68" x2="155.5" y2="78" stroke="black"/>
+<line x1="156.5" y1="88" x2="156.5" y2="98" stroke="black"/>
+<line x1="159.5" y1="88" x2="159.5" y2="98" stroke="black"/>
+<line x1="162.5" y1="88" x2="162.5" y2="98" stroke="black"/>
+<line x1="165.5" y1="88" x2="165.5" y2="98" stroke="black"/>
+<line x1="168.5" y1="88" x2="168.5" y2="98" stroke="black"/>
+<line x1="171.5" y1="88" x2="171.5" y2="98" stroke="black"/>
+<line x1="183.5" y1="88" x2="183.5" y2="98" stroke="black"/>
+<line x1="186.5" y1="88" x2="186.5" y2="98" stroke="black"/>
+<line x1="189.5" y1="88" x2="189.5" y2="98" stroke="black"/>
+<line x1="180.5" y1="88" x2="180.5" y2="98" stroke="black"/>
+<line x1="177.5" y1="88" x2="177.5" y2="98" stroke="black"/>
+<line x1="174.5" y1="88" x2="174.5" y2="98" stroke="black"/>
+<line x1="167.5" y1="68" x2="167.5" y2="78" stroke="black"/>
+<line x1="155.5" y1="79" x2="155.5" y2="87" stroke="black"/>
+<line x1="350.5" y1="79" x2="350.5" y2="87" stroke="black"/>
+<line x1="308" y1="67.5" x2="315" y2="67.5" stroke="white"/>
+<line x1="258" y1="67.5" x2="264" y2="67.5" stroke="white"/>
+<line x1="258" y1="65.5" x2="263.999" y2="65.5" stroke="white"/>
+<line x1="308" y1="65.5" x2="315" y2="65.5" stroke="white"/>
+<line x1="191" y1="67.5" x2="198" y2="67.5" stroke="white"/>
+<line x1="191" y1="65.5" x2="198" y2="65.5" stroke="white"/>
+<line x1="207" y1="67.5" x2="213" y2="67.5" stroke="white"/>
+<line x1="207" y1="65.5" x2="213" y2="65.5" stroke="white"/>
+<line x1="262.5" y1="3" x2="262.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="324.5" y1="3" x2="324.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="199.5" y1="3" x2="199.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="63.5" y1="3" x2="63.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="128.5" y1="3" x2="128.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="382.5" y1="3" x2="382.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="443.5" y1="3" x2="443.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="2" y1="33.5" x2="500" y2="33.5" stroke-width="3" stroke="black"/>
+<line x1="3" y1="66.5" x2="43" y2="66.5" stroke-width="3" stroke="black"/>
+<line x1="500" y1="66.5" x2="440" y2="66.5" stroke-width="3" stroke="black"/>
+<line x1="27.5" y1="67" x2="27.5" y2="100" stroke-width="3" stroke="black"/>
+<line x1="110.5" y1="65" x2="110.5" y2="98" stroke-width="3" stroke="black"/>
+<line x1="7" y1="65.5" x2="13" y2="65.5" stroke="white"/>
+<line x1="7" y1="67.5" x2="13" y2="67.5" stroke="white"/>
+<line x1="33" y1="65.5" x2="39" y2="65.5" stroke="white"/>
+<line x1="33" y1="67.5" x2="39" y2="67.5" stroke="white"/>
+<line x1="49" y1="34.5" x2="57" y2="34.5" stroke="white"/>
+<line x1="113" y1="32.5" x2="121" y2="32.5" stroke="white"/>
+<line x1="113" y1="34.5" x2="121" y2="34.5" stroke="white"/>
+<line x1="49" y1="32.5" x2="57" y2="32.5" stroke="white"/>
+<line x1="184" y1="34.5" x2="192" y2="34.5" stroke="white"/>
+<line x1="184" y1="32.5" x2="192" y2="32.5" stroke="white"/>
+<line x1="247" y1="34.5" x2="255" y2="34.5" stroke="white"/>
+<line x1="247" y1="32.5" x2="255" y2="32.5" stroke="white"/>
+<line x1="310" y1="34.5" x2="318" y2="34.5" stroke="white"/>
+<line x1="310" y1="32.5" x2="318" y2="32.5" stroke="white"/>
+<line x1="368" y1="34.5" x2="376" y2="34.5" stroke="white"/>
+<line x1="368" y1="32.5" x2="376" y2="32.5" stroke="white"/>
+<line x1="429" y1="34.5" x2="437" y2="34.5" stroke="white"/>
+<line x1="429" y1="32.5" x2="437" y2="32.5" stroke="white"/>
+<line x1="449" y1="32.5" x2="457" y2="32.5" stroke="white"/>
+<line x1="449" y1="34.5" x2="457" y2="34.5" stroke="white"/>
+<line x1="482" y1="67.5" x2="487" y2="67.5" stroke="white"/>
+<line x1="494" y1="67.5" x2="498" y2="67.5" stroke="white"/>
+<line x1="470" y1="67.5" x2="475" y2="67.5" stroke="white"/>
+<line x1="470" y1="65.5" x2="475" y2="65.5" stroke="white"/>
+<line x1="439.5" y1="89" x2="439.5" y2="95" stroke="white"/>
+<line x1="437.5" y1="89" x2="437.5" y2="95" stroke="white"/>
+<line x1="494" y1="65.5" x2="498" y2="65.5" stroke="white"/>
+<line x1="482" y1="65.5" x2="487" y2="65.5" stroke="white"/>
+<line x1="111.5" y1="89" x2="111.5" y2="95" stroke="white"/>
+<line x1="109.5" y1="89" x2="109.5" y2="95" stroke="white"/>
+<line x1="27.6464" y1="71.6464" x2="32.6464" y2="66.6464" stroke="black"/>
+<line x1="27.6464" y1="74.6464" x2="35.6464" y2="66.6464" stroke="black"/>
+<line x1="27.6464" y1="77.6464" x2="38.6464" y2="66.6464" stroke="black"/>
+<line x1="27.6464" y1="80.6464" x2="41.6464" y2="66.6464" stroke="black"/>
+<line x1="27.6464" y1="83.6464" x2="43.6464" y2="67.6464" stroke="black"/>
+<line x1="30.6464" y1="98.6464" x2="44.6464" y2="84.6464" stroke="black"/>
+<line x1="33.6464" y1="98.6464" x2="44.6464" y2="87.6464" stroke="black"/>
+<line x1="35.6464" y1="99.6464" x2="44.6464" y2="90.6464" stroke="black"/>
+<line x1="38.6464" y1="99.6464" x2="43.6464" y2="94.6464" stroke="black"/>
+<line x1="28.6464" y1="97.6464" x2="44.6464" y2="81.6464" stroke="black"/>
+<line x1="28.6464" y1="94.6464" x2="44.6464" y2="78.6464" stroke="black"/>
+<line x1="27.6464" y1="92.6464" x2="43.6464" y2="76.6464" stroke="black"/>
+<line x1="27.6464" y1="89.6464" x2="43.6464" y2="73.6464" stroke="black"/>
+<line x1="27.6464" y1="86.6464" x2="43.6464" y2="70.6464" stroke="black"/>
+<line x1="466.646" y1="71.6464" x2="471.646" y2="66.6464" stroke="black"/>
+<line x1="466.646" y1="77.6464" x2="477.646" y2="66.6464" stroke="black"/>
+<line x1="466.646" y1="80.6464" x2="480.646" y2="66.6464" stroke="black"/>
+<line x1="466.646" y1="86.6464" x2="486.646" y2="66.6464" stroke="black"/>
+<line x1="466.646" y1="89.6464" x2="489.646" y2="66.6464" stroke="black"/>
+<line x1="466.646" y1="92.6464" x2="492.646" y2="66.6464" stroke="black"/>
+<line x1="466.646" y1="95.6464" x2="495.646" y2="66.6464" stroke="black"/>
+<line x1="466.646" y1="98.6464" x2="498.646" y2="66.6464" stroke="black"/>
+<line x1="468.646" y1="99.6464" x2="500.646" y2="67.6464" stroke="black"/>
+<line x1="471.646" y1="99.6464" x2="501.646" y2="69.6464" stroke="black"/>
+<line x1="474.646" y1="99.6464" x2="501.646" y2="72.6464" stroke="black"/>
+<line x1="477.646" y1="99.6464" x2="501.646" y2="75.6464" stroke="black"/>
+<line x1="480.646" y1="99.6464" x2="500.646" y2="79.6464" stroke="black"/>
+<line x1="483.646" y1="99.6464" x2="501.646" y2="81.6464" stroke="black"/>
+<line x1="486.646" y1="99.6464" x2="501.646" y2="84.6464" stroke="black"/>
+<line x1="489.646" y1="99.6464" x2="501.646" y2="87.6464" stroke="black"/>
+<line x1="492.646" y1="99.6464" x2="501.646" y2="90.6464" stroke="black"/>
+<line x1="495.646" y1="99.6464" x2="501.646" y2="93.6464" stroke="black"/>
+<line x1="466.646" y1="83.6464" x2="483.646" y2="66.6464" stroke="black"/>
+<line x1="467.646" y1="73.6464" x2="474.646" y2="66.6464" stroke="black"/>
+<rect x="440" y="68" width="25" height="30" fill="white"/>
+<rect x="254" y="68" width="49" height="30" fill="white"/>
+<rect x="203" y="68" width="48" height="30" fill="white"/>
+<rect x="112" y="68" width="28" height="30" fill="white"/>
+<rect x="3" y="3" width="59" height="29" fill="white"/>
+<rect x="65" y="3" width="62" height="29" fill="white"/>
+<rect x="130" y="3" width="68" height="29" fill="white"/>
+<rect x="201" y="3" width="60" height="29" fill="white"/>
+<rect x="264" y="3" width="59" height="29" fill="white"/>
+<rect x="326" y="3" width="55" height="29" fill="white"/>
+<rect x="384" y="3" width="58" height="29" fill="white"/>
+<rect x="445" y="3" width="55" height="29" fill="white"/>
+
+<!-- Раздевалка -->
+<g transform="translate(5 73) scale(0.9)" fill="black">
+  <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,13 L12,13 L12,16 L15,22 L12,22 L10,17 L8,22 L5,22 L8,16 L8,13 L5,13 Z"/>
+</g>
+`
+  },
+  4: {
+    viewBox: "0 0 503 101",
+    width: 503, height: 101,
+    markup: `
+<line x1="-1.31134e-07" y1="99.5" x2="503" y2="99.5" stroke-width="3" stroke="black"/>
+<line x1="-1.31134e-07" y1="1.50005" x2="503" y2="1.5" stroke-width="3" stroke="black"/>
+<line x1="1.5" y1="101" x2="1.5" y2="6.55671e-08" stroke-width="3" stroke="black"/>
+<line x1="501.5" y1="101" x2="501.5" y2="6.55671e-08" stroke-width="3" stroke="black"/>
+<rect x="3" y="35" width="497" height="63" fill="white"/>
+<rect x="113" y="69" width="27" height="29" fill="white"/>
+<rect x="203" y="69" width="100" height="29" fill="white"/>
+<rect x="366" y="69" width="27" height="29" fill="white"/>
+<rect x="440" y="3" width="60" height="29" fill="white"/>
+<rect x="376" y="3" width="61" height="29" fill="white"/>
+<rect x="315" y="3" width="58" height="29" fill="white"/>
+<rect x="254" y="3" width="58" height="29" fill="white"/>
+<rect x="192" y="3" width="59" height="29" fill="white"/>
+<rect x="126" y="3" width="63" height="29" fill="white"/>
+<rect x="63" y="3" width="60" height="29" fill="white"/>
+<rect x="3" y="3" width="57" height="29" fill="white"/>
+<line x1="141.5" y1="66" x2="141.5" y2="99" stroke-width="3" stroke="black"/>
+<line x1="111.5" y1="66" x2="111.5" y2="99" stroke-width="3" stroke="black"/>
+<line x1="394.5" y1="66" x2="394.5" y2="99" stroke-width="3" stroke="black"/>
+<line x1="110" y1="67.5" x2="361" y2="67.5" stroke-width="3" stroke="black"/>
+<line x1="190" y1="79.5" x2="155" y2="79.5" stroke="black"/>
+<line x1="190" y1="88.5" x2="155" y2="88.5" stroke="black"/>
+<line x1="188.5" y1="69" x2="188.5" y2="79" stroke="black"/>
+<line x1="185.5" y1="69" x2="185.5" y2="79" stroke="black"/>
+<line x1="182.5" y1="69" x2="182.5" y2="79" stroke="black"/>
+<line x1="179.5" y1="69" x2="179.5" y2="79" stroke="black"/>
+<line x1="176.5" y1="69" x2="176.5" y2="79" stroke="black"/>
+<line x1="173.5" y1="69" x2="173.5" y2="79" stroke="black"/>
+<line x1="170.5" y1="69" x2="170.5" y2="79" stroke="black"/>
+<line x1="164.5" y1="69" x2="164.5" y2="79" stroke="black"/>
+<line x1="161.5" y1="69" x2="161.5" y2="79" stroke="black"/>
+<line x1="158.5" y1="69" x2="158.5" y2="79" stroke="black"/>
+<line x1="155.5" y1="69" x2="155.5" y2="79" stroke="black"/>
+<line x1="156.5" y1="89" x2="156.5" y2="99" stroke="black"/>
+<line x1="159.5" y1="89" x2="159.5" y2="99" stroke="black"/>
+<line x1="162.5" y1="89" x2="162.5" y2="99" stroke="black"/>
+<line x1="165.5" y1="89" x2="165.5" y2="99" stroke="black"/>
+<line x1="168.5" y1="89" x2="168.5" y2="99" stroke="black"/>
+<line x1="171.5" y1="89" x2="171.5" y2="99" stroke="black"/>
+<line x1="183.5" y1="89" x2="183.5" y2="99" stroke="black"/>
+<line x1="186.5" y1="89" x2="186.5" y2="99" stroke="black"/>
+<line x1="189.5" y1="89" x2="189.5" y2="99" stroke="black"/>
+<line x1="180.5" y1="89" x2="180.5" y2="99" stroke="black"/>
+<line x1="177.5" y1="89" x2="177.5" y2="99" stroke="black"/>
+<line x1="174.5" y1="89" x2="174.5" y2="99" stroke="black"/>
+<line x1="167.5" y1="69" x2="167.5" y2="79" stroke="black"/>
+<line x1="155.5" y1="80" x2="155.5" y2="88" stroke="black"/>
+<line x1="191" y1="68.5" x2="198" y2="68.5" stroke="white"/>
+<line x1="110.5" y1="95" x2="110.5" y2="90" stroke="white"/>
+<line x1="112.5" y1="95" x2="112.5" y2="90" stroke="white"/>
+<line x1="211" y1="68.5" x2="218" y2="68.5" stroke="white"/>
+<line x1="211" y1="66.5" x2="218" y2="66.5" stroke="white"/>
+<line x1="191" y1="66.5" x2="198" y2="66.5" stroke="white"/>
+<line x1="306" y1="67.5" x2="366" y2="67.5" stroke-width="3" stroke="black"/>
+<line x1="364.5" y1="66" x2="364.5" y2="99" stroke-width="3" stroke="black"/>
+<line x1="351" y1="79.5" x2="316" y2="79.5" stroke="black"/>
+<line x1="351" y1="88.5" x2="316" y2="88.5" stroke="black"/>
+<line x1="317.5" y1="69" x2="317.5" y2="79" stroke="black"/>
+<line x1="323.5" y1="69" x2="323.5" y2="79" stroke="black"/>
+<line x1="326.5" y1="69" x2="326.5" y2="79" stroke="black"/>
+<line x1="329.5" y1="69" x2="329.5" y2="79" stroke="black"/>
+<line x1="332.5" y1="69" x2="332.5" y2="79" stroke="black"/>
+<line x1="335.5" y1="69" x2="335.5" y2="79" stroke="black"/>
+<line x1="338.5" y1="69" x2="338.5" y2="79" stroke="black"/>
+<line x1="341.5" y1="69" x2="341.5" y2="79" stroke="black"/>
+<line x1="344.5" y1="69" x2="344.5" y2="79" stroke="black"/>
+<line x1="350.5" y1="69" x2="350.5" y2="79" stroke="black"/>
+<line x1="349.5" y1="89" x2="349.5" y2="99" stroke="black"/>
+<line x1="346.5" y1="89" x2="346.5" y2="99" stroke="black"/>
+<line x1="343.5" y1="89" x2="343.5" y2="99" stroke="black"/>
+<line x1="337.5" y1="89" x2="337.5" y2="99" stroke="black"/>
+<line x1="334.5" y1="89" x2="334.5" y2="99" stroke="black"/>
+<line x1="331.5" y1="89" x2="331.5" y2="99" stroke="black"/>
+<line x1="325.5" y1="89" x2="325.5" y2="99" stroke="black"/>
+<line x1="322.5" y1="89" x2="322.5" y2="99" stroke="black"/>
+<line x1="319.5" y1="89" x2="319.5" y2="99" stroke="black"/>
+<line x1="316.5" y1="89" x2="316.5" y2="99" stroke="black"/>
+<line x1="328.5" y1="89" x2="328.5" y2="99" stroke="black"/>
+<line x1="340.5" y1="89" x2="340.5" y2="99" stroke="black"/>
+<line x1="347.5" y1="69" x2="347.5" y2="79" stroke="black"/>
+<line x1="320.5" y1="69" x2="320.5" y2="79" stroke="black"/>
+<line x1="350.5" y1="80" x2="350.5" y2="88" stroke="black"/>
+<line x1="308" y1="68.5" x2="315" y2="68.5" stroke="white"/>
+<line x1="308" y1="66.5" x2="315" y2="66.5" stroke="white"/>
+<line x1="304.5" y1="68" x2="304.5" y2="101" stroke-width="3" stroke="black"/>
+<line x1="201.5" y1="68" x2="201.5" y2="101" stroke-width="3" stroke="black"/>
+<line x1="366" y1="67.5" x2="396" y2="67.5" stroke-width="3" stroke="black"/>
+<line x1="48" y1="67.5" x2="3" y2="67.5" stroke-width="3" stroke="black"/>
+<line x1="500" y1="67.5" x2="455" y2="67.5" stroke-width="3" stroke="black"/>
+<line x1="456.5" y1="67" x2="456.5" y2="99" stroke-width="3" stroke="black"/>
+<line x1="476.5" y1="67" x2="476.5" y2="99" stroke-width="3" stroke="black"/>
+<line x1="46.5" y1="67" x2="46.5" y2="99" stroke-width="3" stroke="black"/>
+<line x1="3" y1="33.5" x2="501" y2="33.5" stroke-width="3" stroke="black"/>
+<line x1="252.5" y1="3" x2="252.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="61.5" y1="3" x2="61.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="190.5" y1="3" x2="190.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="124.5" y1="3" x2="124.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="313.5" y1="3" x2="313.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="374.5" y1="3" x2="374.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="438.5" y1="3" x2="438.5" y2="32" stroke-width="3" stroke="black"/>
+<line x1="23.5" y1="66" x2="23.5" y2="98" stroke-width="3" stroke="black"/>
+<line x1="395.5" y1="95" x2="395.5" y2="90" stroke="white"/>
+<line x1="393.5" y1="95" x2="393.5" y2="90" stroke="white"/>
+<line x1="32" y1="68.5" x2="38" y2="68.5" stroke="white"/>
+<line x1="9" y1="68.5" x2="16" y2="68.5" stroke="white"/>
+<line x1="9" y1="68.5" x2="16" y2="68.5" stroke="white"/>
+<line x1="9" y1="66.5" x2="16" y2="66.5" stroke="white"/>
+<line x1="463" y1="68.5" x2="470" y2="68.5" stroke="white"/>
+<line x1="463" y1="66.5" x2="470" y2="66.5" stroke="white"/>
+<line x1="485" y1="66.5" x2="493" y2="66.5" stroke="white"/>
+<line x1="485" y1="68.5" x2="493" y2="68.5" stroke="white"/>
+<line x1="32" y1="66.5" x2="38" y2="66.5" stroke="white"/>
+<line x1="50" y1="34.5" x2="57" y2="34.5" stroke="white"/>
+<line x1="50" y1="32.5" x2="57" y2="32.5" stroke="white"/>
+<line x1="113" y1="32.5" x2="120" y2="32.5" stroke="white"/>
+<line x1="113" y1="34.5" x2="120" y2="34.5" stroke="white"/>
+<line x1="179" y1="32.5" x2="186" y2="32.5" stroke="white"/>
+<line x1="179" y1="34.5" x2="186" y2="34.5" stroke="white"/>
+<line x1="241" y1="34.5" x2="248" y2="34.5" stroke="white"/>
+<line x1="241" y1="32.5" x2="248" y2="32.5" stroke="white"/>
+<line x1="302" y1="34.5" x2="309" y2="34.5" stroke="white"/>
+<line x1="302" y1="32.5" x2="309" y2="32.5" stroke="white"/>
+<line x1="363" y1="34.5" x2="370" y2="34.5" stroke="white"/>
+<line x1="363" y1="32.5" x2="370" y2="32.5" stroke="white"/>
+<line x1="427" y1="34.5" x2="434" y2="34.5" stroke="white"/>
+<line x1="427" y1="32.5" x2="434" y2="32.5" stroke="white"/>
+<line x1="443" y1="32.5" x2="450" y2="32.5" stroke="white"/>
+<line x1="443" y1="34.5" x2="450" y2="34.5" stroke="white"/>
+<line x1="1.64645" y1="70.6464" x2="3.64645" y2="68.6464" stroke="black"/>
+<line x1="1.64645" y1="73.6464" x2="6.64645" y2="68.6464" stroke="black"/>
+<line x1="1.64645" y1="76.6464" x2="10.6464" y2="67.6464" stroke="black"/>
+<line x1="1.64645" y1="82.6464" x2="16.6464" y2="67.6464" stroke="black"/>
+<line x1="1.64645" y1="85.6464" x2="19.6464" y2="67.6464" stroke="black"/>
+<line x1="1.64645" y1="88.6464" x2="21.6464" y2="68.6464" stroke="black"/>
+<line x1="1.64645" y1="91.6464" x2="22.6464" y2="70.6464" stroke="black"/>
+<line x1="1.64645" y1="94.6464" x2="22.6464" y2="73.6464" stroke="black"/>
+<line x1="1.64645" y1="97.6464" x2="22.6464" y2="76.6464" stroke="black"/>
+<line x1="3.64645" y1="98.6464" x2="22.6464" y2="79.6464" stroke="black"/>
+<line x1="6.64645" y1="98.6464" x2="22.6464" y2="82.6464" stroke="black"/>
+<line x1="9.64645" y1="98.6464" x2="22.6464" y2="85.6464" stroke="black"/>
+<line x1="12.6464" y1="98.6464" x2="22.6464" y2="88.6464" stroke="black"/>
+<line x1="15.6464" y1="98.6464" x2="22.6464" y2="91.6464" stroke="black"/>
+<line x1="18.6464" y1="98.6464" x2="22.6464" y2="94.6464" stroke="black"/>
+<line x1="21.6464" y1="98.6464" x2="22.6464" y2="97.6464" stroke="black"/>
+<line x1="1.64645" y1="79.6464" x2="13.6464" y2="67.6464" stroke="black"/>
+<line x1="476.646" y1="70.6464" x2="479.646" y2="67.6464" stroke="black"/>
+<line x1="476.646" y1="73.6464" x2="482.646" y2="67.6464" stroke="black"/>
+<line x1="476.646" y1="76.6464" x2="485.646" y2="67.6464" stroke="black"/>
+<line x1="476.646" y1="79.6464" x2="488.646" y2="67.6464" stroke="black"/>
+<line x1="476.646" y1="82.6464" x2="491.646" y2="67.6464" stroke="black"/>
+<line x1="476.646" y1="85.6464" x2="494.646" y2="67.6464" stroke="black"/>
+<line x1="476.646" y1="88.6464" x2="496.646" y2="68.6464" stroke="black"/>
+<line x1="477.606" y1="99.6464" x2="501.606" y2="75.6464" stroke="black"/>
+<line x1="480.646" y1="99.6464" x2="501.646" y2="78.6464" stroke="black"/>
+<line x1="483.646" y1="99.6464" x2="500.646" y2="82.6464" stroke="black"/>
+<line x1="486.646" y1="99.6464" x2="501.646" y2="84.6464" stroke="black"/>
+<line x1="489.646" y1="99.6464" x2="500.646" y2="88.6464" stroke="black"/>
+<line x1="492.646" y1="99.6464" x2="500.646" y2="91.6464" stroke="black"/>
+<line x1="495.646" y1="99.6464" x2="500.646" y2="94.6464" stroke="black"/>
+<line x1="498.646" y1="99.6464" x2="501.646" y2="96.6464" stroke="black"/>
+<line x1="476.646" y1="97.7264" x2="500.646" y2="73.7264" stroke="black"/>
+<line x1="476.646" y1="94.6464" x2="501.646" y2="69.6464" stroke="black"/>
+<line x1="476.646" y1="91.6464" x2="499.646" y2="68.6464" stroke="black"/>
+
+<!-- Раздевалки -->
+<g transform="translate(26.5 73) scale(0.85)" fill="black">
+  <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,13 L12,13 L12,16 L15,22 L12,22 L10,17 L8,22 L5,22 L8,16 L8,13 L5,13 Z"/>
+</g>
+<g transform="translate(458.5 73) scale(0.8)" fill="black">
+  <path d="M10,2 C11.1,2 12,2.9 12,4 C12,5.1 11.1,6 10,6 C8.9,6 8,5.1 8,4 C8,2.9 8.9,2 10,2 Z M7,7 L13,7 L15,12 L13,12 L13,16 L14,22 L11,22 L10,17 L9,22 L6,22 L7,16 L7,12 L5,12 Z"/>
+</g>
+`
+  }
+};
+</script>
+<script>
+const roomZones = {
+  1: [
+    { id:"1-1", label:"1", cx:39, cy:19, points:"4,4 75,4 75,34 4,34" },
+    { id:"1-gym", label:"Тр.зал", cx:93, cy:19, points:"76,4 110,4 110,34 76,34" },
+    { id:"1-4", label:"4", cx:145, cy:19, points:"112,4 178,4 178,34 112,34" },
+    { id:"1-5", label:"5", cx:216, cy:19, points:"181,4 251,4 251,34 181,34" },
+    { id:"1-6", label:"6", cx:292, cy:19, points:"254,4 330,4 330,34 254,34" },
+    { id:"1-7", label:"7", cx:372, cy:19, points:"333,4 411,4 411,34 333,34" },
+    { id:"1-8", label:"8", cx:456, cy:19, points:"414,4 498,4 498,34 414,34" },
+    { id:"1-60", label:"60", cx:369, cy:88, points:"356,73 382,73 382,103 356,103" },
+    { id:"1-small-hall", label:"Малый зал", cx:73, cy:68, points:"4,36.5 143,36.5 143,103 4,103" },
+    { id:"1-10", label:"10", cx:224, cy:147, points:"201,106 248,106 248,189 201,189" },
+    { id:"1-lib", label:"Библ",tooltip:"Библиотека", cx:224, cy:243, points:"201,206 248,206 248,281 201,281" },
+    { id:"1-canteen", label:"Столовая", cx:101, cy:353, points:"4,306 199,306 199,401 4,401" },
+    { id:"1-big-hall", label:"Большой зал", cx:434, cy:353, points:"371,306 498,306 498,401 371,401" },
+    { id:"1-phys", label:"Физра", cx:335, cy:384, points:"301,370 368,370 368,401 301,401" }
+  ],
+  2: [
+    { id:"2-11", label:"11", cx:33, cy:18, points:"3,3 64,3 64,33 3,33" },
+    { id:"2-12", label:"12", cx:96, cy:18, points:"65,3 127,3 127,33 65,33" },
+    { id:"2-13", label:"13", cx:159, cy:18, points:"128,3 190,3 190,33 128,33" },
+    { id:"2-14", label:"14", cx:222, cy:18, points:"191,3 253,3 253,33 191,33" },
+    { id:"2-15", label:"15", cx:285, cy:18, points:"254,3 316,3 316,33 254,33" },
+    { id:"2-16", label:"16", cx:348, cy:18, points:"317,3 379,3 379,33 317,33" },
+    { id:"2-17", label:"17", cx:409, cy:18, points:"380,3 439,3 439,33 380,33" },
+    { id:"2-18", label:"18", cx:470, cy:18, points:"440,3 500,3 500,33 440,33" },
+    { id:"2-50", label:"50", cx:41.5, cy:87, points:"29,73 52,73 52,103 29,103" },
+    { id:"2-51", label:"51", cx:124, cy:87, points:"107,72 141,72 141,103 107,103" },
+    { id:"2-54", label:"54", cx:380.5, cy:87, points:"361,72 398,72 398,103 361,103" },
+    { id:"2-19", label:"19", cx:216, cy:154, points:"200,124 232,124 232,175 200,175" },
+    { id:"2-20", label:"20", cx:287, cy:154, points:"270,123 304,123 304,186 270,186" },
+    { id:"2-29", label:"29", tooltip:"Регистратура", cx:216, cy:225.5, points:"200,178 232,178 232,246 200,246" },
+    { id:"2-med", label:"Мед", tooltip:"Медицинский кабинет", cx:216, cy:269, points:"200,249 232,249 232,303 200,303" },
+    { id:"2-21", label:"21", cx:287, cy:245, points:"270,210 304,210 304,280 270,280" },
+    { id:"2-act", label:"Акт зал", cx:74, cy:354, points:"3,306 145,306 145,402 3,402" },
+    { id:"2-26", label:"26", cx:172, cy:382, points:"147,338 198,338 198,402 147,402" },
+    { id:"2-24", label:"24", cx:337, cy:333, points:"306,306 368,306 368,361 306,361" },
+    { id:"2-25", label:"25", cx:319, cy:382, points:"270,363 368,363 368,402 270,402" }
+  ],
+  3: [
+    { id:"3-30", label:"30", cx:33, cy:18, points:"3,3 63,3 63,32 3,32" },
+    { id:"3-31", label:"31", cx:96, cy:18, points:"64,3 128,3 128,32 64,32" },
+    { id:"3-32", label:"32", cx:164, cy:18, points:"129,3 199,3 199,32 129,32" },
+    { id:"3-33", label:"33", cx:231, cy:18, points:"200,3 262,3 262,32 200,32" },
+    { id:"3-34", label:"34", cx:293, cy:18, points:"263,3 324,3 324,32 263,32" },
+    { id:"3-35", label:"35", cx:353, cy:18, points:"325,3 382,3 382,32 325,32" },
+    { id:"3-36", label:"36", cx:413, cy:18, points:"383,3 443,3 443,32 383,32" },
+    { id:"3-37", label:"37", cx:472, cy:18, points:"444,3 500,3 500,32 444,32" },
+    { id:"3-56", label:"56", cx:125, cy:83, points:"112,68 140,68 140,98 112,98" },
+    { id:"3-40", label:"40", cx:227, cy:83, points:"203,68 251,68 251,98 203,98" },
+    { id:"3-39", label:"39", cx:277, cy:83, points:"304,68 254,68 254,98 304,98" },
+    { id:"3-38", label:"38", cx:453, cy:83, points:"440,68 466,68 466,98 440,98" }
+  ],
+  4: [
+    { id:"4-41", label:"41", cx:32, cy:18, points:"3,3 60,3 60,32 3,32" },
+    { id:"4-42", label:"42", cx:93, cy:18, points:"62,3 124,3 124,32 62,32" },
+    { id:"4-43", label:"43", cx:157, cy:18, points:"125,3 190,3 190,32 125,32" },
+    { id:"4-44", label:"44", cx:221, cy:18, points:"191,3 252,3 252,32 191,32" },
+    { id:"4-45", label:"45", cx:283, cy:18, points:"253,3 313,3 313,32 253,32" },
+    { id:"4-46", label:"46", cx:344, cy:18, points:"314,3 374,3 374,32 314,32" },
+    { id:"4-47", label:"47", cx:406, cy:18, points:"375,3 438,3 438,32 375,32" },
+    { id:"4-48", label:"48", cx:469, cy:18, points:"439,3 500,3 500,32 439,32" },
+    { id:"4-52", label:"52", cx:126, cy:84, points:"140,69 113,69 113,99 140,99" },
+    { id:"4-49", label:"49", cx:256, cy:84, points:"303,69 203,69 203,99 303,99" },
+    { id:"4-53", label:"53", cx:380, cy:84, points:"366,69 393,69 393,99 366,99" }
+  ]
+};
+const FLOORS = window.FLOOR_DATA;
+const roomIndex = [];
+Object.keys(roomZones).forEach(floorKey => {
+  const floorNum = Number(floorKey);
+  roomZones[floorKey].forEach(zone => {
+    const searchText = Array.isArray(zone.label) ? zone.label.join(' ') : zone.label;
+    roomIndex.push({
+      label: searchText,
+      searchText: searchText.toLowerCase().trim(),
+      floor: floorNum,
+      zone
+    });
+  });
+});
+const floorRefs = {};
+function buildFloor(num){
+  const container = document.getElementById('floor-' + num);
+  const data = FLOORS[num];
+  container.innerHTML = `
+    <svg viewBox="${data.viewBox}" preserveAspectRatio="xMidYMid meet"
+         xmlns="http://www.w3.org/2000/svg" aria-label="План ${num} этажа">
+      ${data.markup}
+      <g class="zones"></g>
+      <g class="texts"></g>
+    </svg>
+  `;
+  const svg = container.querySelector('svg');
+  const zonesGroup = svg.querySelector('.zones');
+  const textsGroup = svg.querySelector('.texts');
+  roomZones[num].forEach(zone => {
+    const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+    poly.setAttribute('points', zone.points);
+    poly.setAttribute('class','room-highlight');
+    poly.dataset.roomId = zone.id;
+    poly.addEventListener('mouseenter', (e) => {
+      tooltip.textContent = zone.tooltip || (Array.isArray(zone.label) ? zone.label.join(' ') : zone.label);
+      tooltip.style.left = e.clientX + 'px';
+      tooltip.style.top  = (e.clientY - 8) + 'px';
+      tooltip.classList.add('show');
+    });
+    poly.addEventListener('mousemove', (e) => {
+      tooltip.style.left = e.clientX + 'px';
+      tooltip.style.top  = (e.clientY - 8) + 'px';
+    });
+    poly.addEventListener('mouseleave', () => {
+      tooltip.classList.remove('show');
+    });
+    zonesGroup.appendChild(poly);
+    const text = document.createElementNS('http://www.w3.org/2000/svg','text');
+    text.setAttribute('x', zone.cx);
+    text.setAttribute('y', zone.cy);
+    text.setAttribute('class', 'room-text');
+    if (Array.isArray(zone.label)) {
+      const lines = zone.label;
+      const lineHeight = 14;
+      const startY = zone.cy - ((lines.length - 1) * lineHeight) / 2;
+      lines.forEach((line, index) => {
+        const tspan = document.createElementNS('http://www.w3.org/2000/svg','tspan');
+        tspan.setAttribute('x', zone.cx);
+        tspan.setAttribute('y', startY + index * lineHeight);
+        tspan.textContent = line;
+        text.appendChild(tspan);
+      });
+    } else {
+      text.textContent = zone.label;
+    }
+    textsGroup.appendChild(text);
+  });
+  floorRefs[num] = { svg };
+}
+[1,2,3,4].forEach(buildFloor);
+const stage = document.getElementById('stage');
+const viewport = document.getElementById('viewport');
+const tooltip = document.getElementById('tooltip');
+const searchInput = document.getElementById('searchInput');
+const searchSuggestions = document.getElementById('searchSuggestions');
+const MIN_SCALE = 0.3;
+const MAX_SCALE = 6;
+let scale = 1;
+let tx = 0;
+let ty = 0;
+function applyTransform(animate = true){
+  viewport.classList.toggle('no-anim', !animate);
+  viewport.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+}
+function clampPan(){
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const floor = viewport.querySelector('.floor.active');
+  if (!floor) return;
+  const fw = floor.offsetWidth  * scale;
+  const fh = floor.offsetHeight * scale;
+  if (fw <= W) tx = (W - fw) / 2;
+  else {
+    const minX = W - fw;
+    tx = Math.min(0, Math.max(minX, tx));
+  }
+  if (fh <= H) ty = (H - fh) / 2;
+  else {
+    const minY = H - fh;
+    ty = Math.min(0, Math.max(minY, ty));
+  }
+}
+function fitToScreen(animate = true){
+  const floor = viewport.querySelector('.floor.active');
+  const svg = floor ? floor.querySelector('svg') : null;
+  if (!svg) return;
+  const vb = svg.viewBox.baseVal;
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const baseScale = Math.min(W / vb.width, H / vb.height);
+  const fw = vb.width  * baseScale;
+  const fh = vb.height * baseScale;
+  floor.style.width  = fw + 'px';
+  floor.style.height = fh + 'px';
+  scale = 1;
+  tx = (W - fw) / 2;
+  ty = (H - fh) / 2;
+  applyTransform(animate);
+}
+function setScale(newScale, originClientX, originClientY){
+  newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, newScale));
+  if (newScale === scale) return;
+  const floor = viewport.querySelector('.floor.active');
+  if (!floor) return;
+  const px = originClientX ?? window.innerWidth  / 2;
+  const py = originClientY ?? window.innerHeight / 2;
+  const cx = (px - tx) / scale;
+  const cy = (py - ty) / scale;
+  scale = newScale;
+  tx = px - cx * scale;
+  ty = py - cy * scale;
+  clampPan();
+  applyTransform(true);
+}
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.15 : 1/1.15;
+  setScale(scale * factor, e.clientX, e.clientY);
+}, { passive: false });
+let dragging = false;
+let startX = 0, startY = 0, startTx = 0, startTy = 0;
+stage.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  if (e.target.closest('.zoom-btn') || e.target.closest('.floor-btn') || e.target.closest('.search-bar') || e.target.closest('.schedule-btn') || e.target.closest('.class-timer')) return;
+  dragging = true;
+  startX = e.clientX; startY = e.clientY;
+  startTx = tx; startTy = ty;
+  stage.classList.add('dragging');
+});
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  tx = startTx + (e.clientX - startX);
+  ty = startTy + (e.clientY - startY);
+  clampPan();
+  applyTransform(false);
+});
+window.addEventListener('mouseup', () => {
+  dragging = false;
+  stage.classList.remove('dragging');
+});
+let touchState = null;
+stage.addEventListener('touchstart', e => {
+  if (e.touches.length === 1){
+    touchState = {
+      mode:'drag',
+      x: e.touches[0].clientX, y: e.touches[0].clientY,
+      tx, ty
+    };
+  } else if (e.touches.length === 2){
+    const [a,b] = e.touches;
+    touchState = {
+      mode:'pinch',
+      dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+      scale, tx, ty,
+      cx: (a.clientX + b.clientX)/2,
+      cy: (a.clientY + b.clientY)/2
+    };
+  }
+}, { passive: true });
+stage.addEventListener('touchmove', e => {
+  if (!touchState) return;
+  if (touchState.mode === 'drag' && e.touches.length === 1){
+    const t = e.touches[0];
+    tx = touchState.tx + (t.clientX - touchState.x);
+    ty = touchState.ty + (t.clientY - touchState.y);
+    clampPan();
+    applyTransform(false);
+    e.preventDefault();
+  } else if (touchState.mode === 'pinch' && e.touches.length === 2){
+    const [a,b] = e.touches;
+    const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    const factor = dist / touchState.dist;
+    const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, touchState.scale * factor));
+    const px = touchState.cx, py = touchState.cy;
+    const cx = (px - touchState.tx) / touchState.scale;
+    const cy = (py - touchState.ty) / touchState.scale;
+    scale = newScale;
+    tx = px - cx * scale;
+    ty = py - cy * scale;
+    clampPan();
+    applyTransform(false);
+    e.preventDefault();
+  }
+}, { passive: false });
+stage.addEventListener('touchend', () => { touchState = null; });
+stage.addEventListener('touchcancel', () => { touchState = null; });
+document.getElementById('zoomIn').addEventListener('click', () => {
+  setScale(scale * 1.3);
+});
+document.getElementById('zoomOut').addEventListener('click', () => {
+  setScale(scale / 1.3);
+});
+document.getElementById('zoomReset').addEventListener('click', () => {
+  fitToScreen(true);
+});
+function switchFloor(num){
+  document.querySelectorAll('.floor-btn').forEach(b =>
+    b.classList.toggle('active', Number(b.dataset.floor) === num)
+  );
+  document.querySelectorAll('.floor').forEach(f =>
+    f.classList.toggle('active', f.id === 'floor-' + num)
+  );
+  tooltip.classList.remove('show');
+  fitToScreen(true);
+}
+document.querySelectorAll('.floor-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    switchFloor(Number(btn.dataset.floor));
+  });
+});
+function goToRoom(entry){
+  const { floor, zone } = entry;
+  switchFloor(floor);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const floorEl = document.getElementById('floor-' + floor);
+      const svg = floorEl.querySelector('svg');
+      if (!svg) return;
+      const vb = svg.viewBox.baseVal;
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      const baseScale = Math.min(W / vb.width, H / vb.height);
+      const fw = vb.width  * baseScale;
+      const fh = vb.height * baseScale;
+      floorEl.style.width  = fw + 'px';
+      floorEl.style.height = fh + 'px';
+      const targetScale = Math.min(MAX_SCALE, Math.max(2.2, baseScale * 2.2));
+      const roomCx = zone.cx;
+      const roomCy = zone.cy;
+      scale = targetScale;
+      const roomPx = roomCx * scale;
+      const roomPy = roomCy * scale;
+      tx = W / 2 - roomPx;
+      ty = H / 2 - roomPy;
+      clampPan();
+      applyTransform(true);
+      highlightZone(floor, zone.id);
+    });
+  });
+}
+let highlightTimer = null;
+function highlightZone(floorNum, zoneId){
+  const floorEl = document.getElementById('floor-' + floorNum);
+  if (!floorEl) return;
+  floorEl.querySelectorAll('.room-highlight').forEach(el => {
+    el.classList.toggle('flash', el.dataset.roomId === zoneId);
+  });
+  clearTimeout(highlightTimer);
+  highlightTimer = setTimeout(() => {
+    floorEl.querySelectorAll('.room-highlight.flash').forEach(el => el.classList.remove('flash'));
+  }, 2500);
+}
+let suggestionItems = [];
+let activeSuggestion = -1;
+function renderSuggestions(query){
+  searchSuggestions.innerHTML = '';
+  suggestionItems = [];
+  activeSuggestion = -1;
+  const q = query.trim().toLowerCase();
+  if (!q){
+    searchSuggestions.classList.remove('open');
+    return;
+  }
+  const matches = roomIndex.filter(r => r.searchText.includes(q));
+  if (matches.length === 0){
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'Ничего не найдено';
+    searchSuggestions.appendChild(empty);
+    searchSuggestions.classList.add('open');
+    return;
+  }
+  matches.slice(0, 12).forEach(entry => {
+    const item = document.createElement('div');
+    item.className = 'item';
+    item.innerHTML = `<span>${entry.label}</span><span class="floor-tag">${entry.floor} этаж</span>`;
+    item.dataset.floor = entry.floor;
+    item.dataset.roomId = entry.zone.id;
+    item.addEventListener('click', () => {
+      searchInput.value = entry.label;
+      searchSuggestions.classList.remove('open');
+      goToRoom(entry);
+    });
+    searchSuggestions.appendChild(item);
+    suggestionItems.push({ el: item, entry });
+  });
+  searchSuggestions.classList.add('open');
+}
+function performSearch(){
+  const q = searchInput.value.trim().toLowerCase();
+  if (!q) return;
+  let entry = roomIndex.find(r => r.searchText === q);
+  if (!entry) entry = roomIndex.find(r => r.searchText.includes(q));
+  if (entry){
+    searchInput.value = entry.label;
+    searchSuggestions.classList.remove('open');
+    goToRoom(entry);
+  } else {
+    searchInput.style.borderColor = '#e04c4c';
+    setTimeout(() => { searchInput.style.borderColor = ''; }, 800);
+  }
+}
+searchInput.addEventListener('input', () => {
+  renderSuggestions(searchInput.value);
+});
+searchInput.addEventListener('focus', () => {
+  if (searchInput.value.trim()) renderSuggestions(searchInput.value);
+});
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown'){
+    if (suggestionItems.length === 0) return;
+    e.preventDefault();
+    activeSuggestion = (activeSuggestion + 1) % suggestionItems.length;
+    updateActiveSuggestion();
+  } else if (e.key === 'ArrowUp'){
+    if (suggestionItems.length === 0) return;
+    e.preventDefault();
+    activeSuggestion = (activeSuggestion - 1 + suggestionItems.length) % suggestionItems.length;
+    updateActiveSuggestion();
+  } else if (e.key === 'Enter'){
+    e.preventDefault();
+    if (activeSuggestion >= 0 && suggestionItems[activeSuggestion]){
+      const entry = suggestionItems[activeSuggestion].entry;
+      searchInput.value = entry.label;
+      searchSuggestions.classList.remove('open');
+      goToRoom(entry);
+    } else {
+      performSearch();
+    }
+  } else if (e.key === 'Escape'){
+    searchSuggestions.classList.remove('open');
+  }
+});
+function updateActiveSuggestion(){
+  suggestionItems.forEach((item, i) => {
+    item.el.classList.toggle('active', i === activeSuggestion);
+  });
+  if (suggestionItems[activeSuggestion]){
+    suggestionItems[activeSuggestion].el.scrollIntoView({ block: 'nearest' });
+  }
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.search-bar')){
+    searchSuggestions.classList.remove('open');
+  }
+});
+window.addEventListener('resize', () => {
+  const prevScale = scale;
+  fitToScreen(false);
+  if (prevScale !== 1){
+    scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prevScale));
+    clampPan();
+    applyTransform(false);
+  }
+});
+window.addEventListener('load', () => {
+  fitToScreen(false);
+});
+const scheduleModal = document.getElementById('scheduleModal');
+const scheduleBtn = document.getElementById('scheduleBtn');
+const scheduleClose = document.getElementById('scheduleClose');
+const scheduleTabs = document.querySelectorAll('.schedule-tab');
+const scheduleContents = document.querySelectorAll('.schedule-content');
+scheduleBtn.addEventListener('click', () => {
+  scheduleModal.classList.add('open');
+});
+scheduleClose.addEventListener('click', () => {
+  scheduleModal.classList.remove('open');
+});
+scheduleModal.addEventListener('click', (e) => {
+  if (e.target === scheduleModal) scheduleModal.classList.remove('open');
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && scheduleModal.classList.contains('open')) {
+    scheduleModal.classList.remove('open');
+  }
+});
+scheduleTabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    scheduleTabs.forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const target = tab.dataset.tab;
+    scheduleContents.forEach(c => {
+      c.classList.toggle('hidden', c.id !== 'tab-' + target);
+    });
+  });
+});
+const timerEl = document.getElementById('classTimer');
+const timerLabel = document.getElementById('timerLabel');
+const timerTime = document.getElementById('timerTime');
+const timerLesson = document.getElementById('timerLesson');
+const SCHEDULES = {
+  normal: [
+    { type: 'lesson', num: 1, start: 8*60+0,  end: 8*60+40, shift: 1 },
+    { type: 'break',               start: 8*60+40, end: 8*60+45, shift: 1 },
+    { type: 'lesson', num: 2, start: 8*60+45, end: 9*60+25, shift: 1 },
+    { type: 'break',               start: 9*60+25, end: 9*60+35, shift: 1 },
+    { type: 'lesson', num: 3, start: 9*60+35, end: 10*60+15, shift: 1 },
+    { type: 'break',               start: 10*60+15, end: 10*60+30, shift: 1 },
+    { type: 'lesson', num: 4, start: 10*60+30, end: 11*60+10, shift: 1 },
+    { type: 'break',               start: 11*60+10, end: 11*60+20, shift: 1 },
+    { type: 'lesson', num: 5, start: 11*60+20, end: 12*60+0, shift: 1 },
+    { type: 'break',               start: 12*60+0,  end: 12*60+15, shift: 1 },
+    { type: 'lesson', num: 6, start: 12*60+15, end: 12*60+55, shift: 1 },
+    { type: 'break',               start: 12*60+55, end: 13*60+0, shift: 1 },
+    { type: 'lesson', num: 7, start: 13*60+0,  end: 13*60+40, shift: 1 },
+    { type: 'lesson', num: 1, start: 13*60+0,  end: 13*60+40, shift: 2 },
+    { type: 'break',               start: 13*60+40, end: 13*60+50, shift: 2 },
+    { type: 'lesson', num: 2, start: 13*60+50, end: 14*60+30, shift: 2 },
+    { type: 'break',               start: 14*60+30, end: 14*60+45, shift: 2 },
+    { type: 'lesson', num: 3, start: 14*60+45, end: 15*60+25, shift: 2 },
+    { type: 'break',               start: 15*60+25, end: 15*60+35, shift: 2 },
+    { type: 'lesson', num: 4, start: 15*60+35, end: 16*60+15, shift: 2 },
+    { type: 'break',               start: 16*60+15, end: 16*60+20, shift: 2 },
+    { type: 'lesson', num: 5, start: 16*60+20, end: 17*60+0, shift: 2 }
+  ],
+  short: [
+    { type: 'lesson', num: 1, start: 8*60+0,  end: 8*60+35, shift: 1 },
+    { type: 'break',               start: 8*60+35, end: 8*60+40, shift: 1 },
+    { type: 'lesson', num: 2, start: 8*60+40, end: 9*60+15, shift: 1 },
+    { type: 'break',               start: 9*60+15, end: 9*60+25, shift: 1 },
+    { type: 'lesson', num: 3, start: 9*60+25, end: 10*60+0, shift: 1 },
+    { type: 'break',               start: 10*60+0,  end: 10*60+15, shift: 1 },
+    { type: 'lesson', num: 4, start: 10*60+15, end: 10*60+50, shift: 1 },
+    { type: 'break',               start: 10*60+50, end: 11*60+0, shift: 1 },
+    { type: 'lesson', num: 5, start: 11*60+0,  end: 11*60+35, shift: 1 },
+    { type: 'break',               start: 11*60+35, end: 11*60+50, shift: 1 },
+    { type: 'lesson', num: 6, start: 11*60+50, end: 12*60+25, shift: 1 },
+    { type: 'break',               start: 12*60+25, end: 12*60+30, shift: 1 },
+    { type: 'lesson', num: 7, start: 12*60+30, end: 13*60+5, shift: 1 },
+    { type: 'lesson', num: 0, start: 13*60+0,  end: 13*60+15, shift: 2 },
+    { type: 'break',               start: 13*60+15, end: 13*60+20, shift: 2 },
+    { type: 'lesson', num: 1, start: 13*60+20, end: 13*60+55, shift: 2 },
+    { type: 'break',               start: 13*60+55, end: 14*60+0, shift: 2 },
+    { type: 'lesson', num: 2, start: 14*60+0,  end: 14*60+35, shift: 2 },
+    { type: 'break',               start: 14*60+35, end: 14*60+50, shift: 2 },
+    { type: 'lesson', num: 3, start: 14*60+50, end: 15*60+25, shift: 2 },
+    { type: 'break',               start: 15*60+25, end: 15*60+40, shift: 2 },
+    { type: 'lesson', num: 4, start: 15*60+40, end: 16*60+15, shift: 2 },
+    { type: 'break',               start: 16*60+15, end: 16*60+20, shift: 2 },
+    { type: 'lesson', num: 5, start: 16*60+20, end: 16*60+55, shift: 2 }
+  ],
+  saturday: [
+    { type: 'lesson', num: 1, start: 8*60+0,  end: 8*60+40, shift: 1 },
+    { type: 'break',               start: 8*60+40, end: 8*60+45, shift: 1 },
+    { type: 'lesson', num: 2, start: 8*60+45, end: 9*60+25, shift: 1 },
+    { type: 'break',               start: 9*60+25, end: 9*60+30, shift: 1 },
+    { type: 'lesson', num: 3, start: 9*60+30, end: 10*60+10, shift: 1 },
+    { type: 'break',               start: 10*60+10, end: 10*60+20, shift: 1 },
+    { type: 'lesson', num: 4, start: 10*60+20, end: 11*60+0, shift: 1 },
+    { type: 'break',               start: 11*60+0,  end: 11*60+5, shift: 1 },
+    { type: 'lesson', num: 5, start: 11*60+5,  end: 11*60+45, shift: 1 },
+    { type: 'break',               start: 11*60+45, end: 11*60+50, shift: 1 },
+    { type: 'lesson', num: 6, start: 11*60+50, end: 12*60+30, shift: 1 },
+    { type: 'break',               start: 12*60+30, end: 12*60+35, shift: 1 },
+    { type: 'lesson', num: 7, start: 12*60+35, end: 13*60+15, shift: 1 }
+  ]
+};
+function getMoscowDate() {
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  return new Date(utc + (3 * 3600000));
+}
+function getScheduleForToday(dayOfWeek) {
+  if (dayOfWeek === 6) return SCHEDULES.saturday;
+  if (dayOfWeek === 1 || dayOfWeek === 4) return SCHEDULES.short;
+  return SCHEDULES.normal;
+}
+function formatTime(ms) {
+  if (ms < 0) ms = 0;
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}ч ${String(m).padStart(2, '0')}м`;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+function updateClassTimer() {
+  const msk = getMoscowDate();
+  const dayOfWeek = msk.getDay();
+  const currentMinutes = msk.getHours() * 60 + msk.getMinutes() + msk.getSeconds() / 60;
+  if (dayOfWeek === 0) {
+    const tomorrowStart = 8 * 60;
+    const msToStart = (24 * 60 - currentMinutes + tomorrowStart) * 60000;
+    timerEl.className = 'class-timer';
+    timerLabel.textContent = 'Выходной';
+    timerTime.textContent = formatTime(msToStart);
+    timerLesson.textContent = 'до Пн, 1 урока';
+    clearCurrentLessonHighlight();
+    return;
+  }
+  const todaySchedule = getScheduleForToday(dayOfWeek);
+  let current = null;
+  let next = null;
+  for (let i = 0; i < todaySchedule.length; i++) {
+    const r = todaySchedule[i];
+    if (currentMinutes >= r.start && currentMinutes < r.end) {
+      current = r;
+      for (let j = i + 1; j < todaySchedule.length; j++) {
+        if (todaySchedule[j].start >= r.end) { next = todaySchedule[j]; break; }
+      }
+      break;
+    }
+  }
+  if (!current) {
+    let nextLessonToday = null;
+    for (const r of todaySchedule) {
+      if (r.type === 'lesson' && r.start > currentMinutes) {
+        if (!nextLessonToday || r.start < nextLessonToday.start) {
+          nextLessonToday = r;
+        }
+      }
+    }
+    if (nextLessonToday) {
+      const msToStart = (nextLessonToday.start - currentMinutes) * 60000;
+      timerEl.className = 'class-timer';
+      timerLabel.textContent = 'До урока';
+      timerTime.textContent = formatTime(msToStart);
+      timerLesson.textContent = `${nextLessonToday.num} урок · ${nextLessonToday.shift} смена`;
+    } else {
+      let daysAhead = 1;
+      let nextDay = (dayOfWeek + daysAhead) % 7;
+      while (nextDay === 0) {
+        daysAhead++;
+        nextDay = (dayOfWeek + daysAhead) % 7;
+      }
+      const nextDaySchedule = getScheduleForToday(nextDay);
+      const firstLesson = nextDaySchedule.find(r => r.type === 'lesson');
+      const targetStart = firstLesson ? firstLesson.start : 8*60;
+      const msToNextDay = (24*60 - currentMinutes + (daysAhead - 1) * 24*60 + targetStart) * 60000;
+      const dayNames = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+      timerEl.className = 'class-timer';
+      timerLabel.textContent = 'До занятий';
+      timerTime.textContent = formatTime(msToNextDay);
+      timerLesson.textContent = `${dayNames[nextDay]}, ${firstLesson ? firstLesson.num : 1} урок`;
+    }
+    clearCurrentLessonHighlight();
+    return;
+  }
+  const endMinutes = current.end;
+  const msLeft = (endMinutes - currentMinutes) * 60000;
+  if (current.type === 'lesson') {
+    timerEl.className = 'class-timer status-lesson';
+    timerLabel.textContent = 'До конца урока';
+    timerLesson.textContent = `${current.num} урок · ${current.shift} смена`;
+    highlightCurrentLesson(current, dayOfWeek);
+  } else {
+    timerEl.className = 'class-timer status-break';
+    timerLabel.textContent = 'До конца перемены';
+    const nextLesson = todaySchedule.find(r => r.type === 'lesson' && r.start === current.end);
+    timerLesson.textContent = nextLesson ? `Далее: ${nextLesson.num} урок` : '';
+    clearCurrentLessonHighlight();
+  }
+  timerTime.textContent = formatTime(msLeft);
+}
+function highlightCurrentLesson(lesson, dayOfWeek) {
+  document.querySelectorAll('.schedule-table tr.current-lesson').forEach(tr => {
+    tr.classList.remove('current-lesson');
+  });
+  let activeTab = null;
+  document.querySelectorAll('.schedule-tab').forEach(tab => {
+    if (tab.classList.contains('active')) activeTab = tab.dataset.tab;
+  });
+  const expectedTab = dayOfWeek === 6 ? 'saturday' : (dayOfWeek === 1 || dayOfWeek === 4 ? 'short' : 'normal');
+  if (activeTab !== expectedTab) {
+    return;
+  }
+  const tabEl = document.getElementById('tab-' + activeTab);
+  if (!tabEl) return;
+  const shiftTitles = tabEl.querySelectorAll('.shift-title');
+  let targetTable = null;
+  if (activeTab === 'saturday') {
+    targetTable = tabEl.querySelector('.schedule-table');
+  } else {
+    shiftTitles.forEach(title => {
+      const text = title.textContent.trim();
+      if (lesson.shift === 1 && text.includes('I смена') && !text.includes('II')) {
+        targetTable = title.nextElementSibling;
+      }
+      if (lesson.shift === 2 && text.startsWith('II')) {
+        targetTable = title.nextElementSibling;
+      }
+    });
+  }
+  if (!targetTable) return;
+  const rows = targetTable.querySelectorAll('tr');
+  rows.forEach(row => {
+    const firstCell = row.querySelector('td');
+    if (firstCell && firstCell.textContent.trim() === String(lesson.num)) {
+      row.classList.add('current-lesson');
+    }
+  });
+}
+function clearCurrentLessonHighlight() {
+  document.querySelectorAll('.schedule-table tr.current-lesson').forEach(tr => {
+    tr.classList.remove('current-lesson');
+  });
+}
+updateClassTimer();
+setInterval(updateClassTimer, 1000);
+scheduleTabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    setTimeout(() => {
+      const msk = getMoscowDate();
+      const dow = msk.getDay();
+      const curMin = msk.getHours() * 60 + msk.getMinutes() + msk.getSeconds() / 60;
+      const sch = getScheduleForToday(dow);
+      const cur = sch.find(r => r.type === 'lesson' && curMin >= r.start && curMin < r.end);
+      if (cur) highlightCurrentLesson(cur, dow);
+    }, 10);
+  });
+});
+</script>
+</body>
+</html>
